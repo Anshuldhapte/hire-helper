@@ -1,16 +1,26 @@
 // Checks that words the AI says it copied really are in the original text, so the AI
 // can't tick a must-have or "find" a salary that nobody wrote.
 
-// Compares text loosely: ignores case, punctuation and extra spaces, so "Licence hai." matches "licence hai".
-const loose = (text: string) =>
-  text
+// Marathi and Hindi keyboards type digits as ०१२३४५६७८९; turn them into 0–9.
+export const toLatinDigits = (text: string) =>
+  text.replace(/[०-९]/g, (d) => String(d.charCodeAt(0) - 0x0966));
+
+// Lower case, ₹ / Rs / rs treated the same, punctuation ignored, spaces collapsed,
+// so "Rs. 12,000" matches "₹12,000" and "Licence hai." matches "licence hai".
+export function normalize(text: string) {
+  return toLatinDigits(text)
     .normalize("NFC")
     .toLowerCase()
-    .replace(/[.,!?;:'"()[\]\-–—।…₹]/g, " ")
+    .replace(/₹|\brs\b\.?/g, " rs ")
+    .replace(/[.,!?;:'"“”‘’()[\]{}\-–—।॥…*_/\\|@#&+=<>~`^%$]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
 
 export function quoteIsIn(quote: string, text: string) {
-  const q = loose(quote);
-  return q.length >= 2 && loose(text).includes(q);
+  const q = normalize(quote);
+  return q.length >= 2 && normalize(text).includes(q);
 }
+
+// Just the digits of an amount, e.g. "₹12,000" → "12000", "१२,०००" → "12000".
+export const digitsOf = (text: string) => toLatinDigits(text).replace(/[^\d]/g, "");

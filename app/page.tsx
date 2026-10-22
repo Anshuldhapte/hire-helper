@@ -1,19 +1,78 @@
 "use client";
 
-import { useState } from "react";
-import { buildRanking, splitApplicants, type Ranking } from "@/lib/applicants";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { buildRanking, splitApplicants, type Ranking, type RankedCard } from "@/lib/applicants";
+import {
+  ACCOMMODATION_OPTIONS,
+  FEE_LINE,
+  LEGAL_NOTE,
+  type AccommodationKey,
+} from "@/lib/roles";
+import { BUILT_IN_SAMPLES, DEMO_JOB_LINE } from "@/lib/samples";
 import {
   MAX_DESCRIPTION_CHARS,
   type CreatePostResponse,
   type Job,
+  type PreviewResponse,
   type RankResponse,
+  type RequiredDetail,
   type SamplesResponse,
-  type Verdict,
 } from "@/lib/schemas";
+import { checkInMessage, whatsappLink, whatsappShareLink } from "@/lib/whatsapp";
+import { findVoice, getRecognition, speak, useMicSupported, useVoices, type Recognition } from "./speech";
+import {
+  Card,
+  ChatIcon,
+  CopyIcon,
+  Logo,
+  MicIcon,
+  Notice,
+  STATUS_STYLE,
+  ScoreRing,
+  Spinner,
+  StepTitle,
+  Stepper,
+  primaryButton,
+  secondaryButton,
+  whatsappButton,
+  type Message,
+} from "./ui";
 
-type Message = { tone: "yellow" | "red"; text: string } | null;
+const NETWORK_ERROR = "The AI is busy right now. Please try again.";
 
-const NETWORK_ERROR = "Couldn't reach the AI. Please try again.";
+// One tap fills in a realistic line. The first one is our demo job.
+const EXAMPLES = [
+  { label: "🍷 Wine shop counter", text: DEMO_JOB_LINE },
+  {
+    label: "⛽ Petrol pump attendant",
+    text: "Need a petrol pump attendant in Hadapsar, Pune, ₹13,000 a month, day shift, must handle cash and UPI",
+  },
+  {
+    label: "🛒 Kirana helper",
+    text: "Need a helper for my kirana store in Karve Nagar, Pune, ₹11,000 a month, 9 am to 9 pm, must lift stock and do home delivery",
+  },
+  {
+    label: "🍳 Café helper",
+    text: "Need a kitchen helper for my café in Baner, Pune, ₹12,000 a month, 6 days a week, must know basic cutting and cleaning",
+  },
+  {
+    label: "🛵 Delivery staff",
+    text: "Need a delivery rider for my shop in Aundh, Pune, ₹14,000 a month, must have a bike and licence",
+  },
+];
+
+// Shown next to each missing detail so the owner knows exactly what to add.
+const MISSING_HINT: Record<RequiredDetail, string> = {
+  role: "what they'll do, e.g. “counter staff”",
+  pay: "e.g. “₹12,000 a month”",
+  area: "e.g. “Kothrud”",
+};
+
+const MIC_LANGUAGES = [
+  { code: "mr-IN", label: "मराठी" },
+  { code: "hi-IN", label: "हिंदी" },
+  { code: "en-IN", label: "English" },
+];
 
 // POSTs JSON and always resolves to a response shape, even if the network or server
 // fails. Gives up after `timeoutMs`, so the owner is never left waiting.
@@ -31,18 +90,18 @@ async function postJson<T>(url: string, body: unknown, timeoutMs: number): Promi
   }
 }
 
-// Modern clipboard API. Some browsers never answer, so give up after 1 second.
-async function copyModern(text: string) {
-  const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1000));
-  const write = navigator.clipboard
-    .writeText(text)
-    .then(() => true)
-    .catch(() => false);
-  return Promise.race([write, timeout]);
-}
-
-// Older copy method. Tried first because it works inside the tap itself, in nearly every browser.
-function copyFallback(text: string) {
+// Copy: try the modern clipboard first (gives up after 1 second if the browser never
+// answers), then an older hidden-textarea method. Returns false if both are blocked.
+async function copyText(text: string) {
+  try {
+    const ok = await Promise.race([
+      navigator.clipboard.writeText(text).then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1000)),
+    ]);
+    if (ok) return true;
+  } catch {
+    // blocked; try the older way below
+  }
   const area = document.createElement("textarea");
   area.value = text;
   area.setAttribute("readonly", "");
@@ -55,152 +114,255 @@ function copyFallback(text: string) {
   return ok;
 }
 
-const VERDICT_MARK: Record<Verdict, { icon: string; className: string }> = {
-  met: { icon: "✓", className: "text-green-700" },
-  missed: { icon: "✗", className: "text-red-700" },
-  unclear: { icon: "?", className: "text-zinc-500" },
-};
+// The post the owner shares: the AI's post, plus lines added by code (suggested must-haves,
+// the accommodation answer) just before its last "how to apply" line, plus the fee line.
+function fullPost(job: Job, accommodation: AccommodationKey | null) {
+  const lines = job.postBody.split("\n");
+  const applyLine = lines.length > 1 ? lines.pop()! : null;
+  const extra = [
+    ...job.mustHaves.filter((m) => m.source === "suggested").map((m) => `✅ ${m.label}`),
+    ACCOMMODATION_OPTIONS.find((o) => o.key === accommodation)?.postLine,
+  ].filter((l): l is string => Boolean(l));
+  return [...lines, ...extra, applyLine, FEE_LINE].filter((l) => l !== null).join("\n");
+}
 
-function Notice({ message }: { message: Message }) {
-  if (!message) return null;
-  const colours =
-    message.tone === "yellow"
-      ? "border-yellow-300 bg-yellow-50 text-yellow-900"
-      : "border-red-300 bg-red-50 text-red-900";
+type CopyState = "idle" | "copied" | "failed";
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [state, setState] = useState<CopyState>("idle");
   return (
-    <p role="alert" className={`rounded-lg border px-3 py-2 text-sm ${colours}`}>
-      {message.text}
-    </p>
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        className={secondaryButton}
+        onClick={async () => {
+          const ok = await copyText(text);
+          setState(ok ? "copied" : "failed");
+          if (ok) setTimeout(() => setState("idle"), 2000);
+        }}
+      >
+        <CopyIcon />
+        {state === "copied" ? "Copied!" : label}
+      </button>
+      {state === "failed" && <Notice message={{ tone: "yellow", text: "Press and hold the text to copy it" }} />}
+    </div>
   );
 }
 
-const button =
-  "rounded-lg px-4 py-3 font-semibold disabled:cursor-not-allowed disabled:opacity-50";
-
 export default function Home() {
+  // ---- Step 1 ----
   const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [postMessage, setPostMessage] = useState<Message>(null);
+  const [missing, setMissing] = useState<RequiredDetail[]>([]);
   const [job, setJob] = useState<Job | null>(null);
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [accommodation, setAccommodation] = useState<AccommodationKey | null>(null);
 
+  // ---- Village preview ----
+  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState<{ marathi: string; hindi: string } | null>(null);
+  const [previewMessage, setPreviewMessage] = useState<Message>(null);
+  const [previewTab, setPreviewTab] = useState<"marathi" | "hindi">("marathi");
+  const voices = useVoices();
+
+  // ---- Voice input ----
+  const micSupported = useMicSupported();
+  const [micLang, setMicLang] = useState("mr-IN");
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<Recognition | null>(null);
+
+  // ---- Step 2 ----
   const [replies, setReplies] = useState("");
+  const [fromSamples, setFromSamples] = useState(false);
+  const [samplesNote, setSamplesNote] = useState<string | null>(null);
+  const [consent, setConsent] = useState(false);
+  const [interviewTime, setInterviewTime] = useState("");
   const [ranking, setRanking] = useState(false);
   const [loadingSamples, setLoadingSamples] = useState(false);
   const [rankMessage, setRankMessage] = useState<Message>(null);
+
+  // ---- Step 3 ----
   const [result, setResult] = useState<Ranking | null>(null);
+  const [hiredId, setHiredId] = useState<string | null>(null);
+
+  const postRef = useRef<HTMLDivElement>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
+
+  const replyCount = useMemo(() => splitApplicants(replies).applicants.length, [replies]);
+  const needsConsent = replies.trim() !== "" && !fromSamples;
+  const step = result ? 3 : job ? 2 : 1;
+
+  // Bring each new result into view, so the owner doesn't have to hunt for it.
+  useEffect(() => {
+    if (job) postRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [job]);
+  useEffect(() => {
+    if (result) resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [result]);
+
+  function clearAfterJobChange() {
+    setResult(null);
+    setRankMessage(null);
+    setPreview(null);
+    setPreviewMessage(null);
+    setHiredId(null);
+  }
 
   async function createPost() {
     const text = description.trim();
+    setMissing([]);
     if (!text) {
       setPostMessage({ tone: "yellow", text: "Please describe the job" });
       return;
     }
     if (text.length > MAX_DESCRIPTION_CHARS) {
-      setPostMessage({
-        tone: "yellow",
-        text: `Please keep it to one or two lines (under ${MAX_DESCRIPTION_CHARS} characters).`,
-      });
+      setPostMessage({ tone: "yellow", text: "Please keep it to one or two lines" });
       return;
     }
 
-    // A new description replaces the old job straight away, so an old post or ranking can
-    // never be used with the new job, even if this request fails. The typed text stays.
+    // A new line replaces the old job straight away, so an old post or ranking can never be
+    // used with the new job, even if this request fails. The typed text stays.
     setCreating(true);
     setPostMessage(null);
     setJob(null);
-    setResult(null);
-    setRankMessage(null);
-    setCopyState("idle");
-    const data = await postJson<CreatePostResponse>(
-      "/api/create-post",
-      { description: text },
-      14_000,
-    );
+    setAccommodation(null);
+    clearAfterJobChange();
+    const data = await postJson<CreatePostResponse>("/api/create-post", { description: text }, 16_000);
     setCreating(false);
 
     if (data.status === "error") {
       setPostMessage({ tone: "red", text: data.message });
-      return;
-    }
-    if (data.status === "needs_info") {
-      setPostMessage({
-        tone: "yellow",
-        text:
-          data.missing.length > 0
-            ? `Please add: ${data.missing.join(", ")}`
-            : "Please add more details: role, pay, area and must-haves.",
-      });
-      return;
-    }
-    setJob({
-      jobTitle: data.jobTitle,
-      post: data.post,
-      mustHaves: data.mustHaves,
-      questions: data.questions,
-    });
-  }
-
-  async function copyPost() {
-    if (!job) return;
-    const text = `${job.post}\n\nScreening questions:\n${job.questions
-      .map((q, i) => `${i + 1}. ${q}`)
-      .join("\n")}`;
-    if (copyFallback(text) || (await copyModern(text))) {
-      setCopyState("copied");
-      setTimeout(() => setCopyState("idle"), 2000);
+    } else if (data.status === "missing") {
+      setMissing(data.missing);
+      setPostMessage({ tone: "yellow", text: `Please add: ${data.missing.join(", ")}` });
     } else {
-      setCopyState("failed");
+      setJob({
+        description: data.description,
+        roleTitle: data.roleTitle,
+        roleKey: data.roleKey,
+        openings: data.openings,
+        area: data.area,
+        pay: data.pay,
+        shift: data.shift,
+        postBody: data.postBody,
+        mustHaves: data.mustHaves,
+        questions: data.questions,
+      });
     }
   }
 
-  // Practice replies written for the job on screen (plus 2 junk replies added by the server).
+  function removeMustHave(id: string) {
+    if (!job || job.mustHaves.length <= 1) return; // keep at least one to rank on
+    setJob({ ...job, mustHaves: job.mustHaves.filter((m) => m.id !== id) });
+    clearAfterJobChange();
+  }
+
+  function chooseAccommodation(key: AccommodationKey) {
+    setAccommodation(key); // plain code: updates the card and post, no AI call
+    setPreview(null); // the preview mentions where they'll stay, so make a fresh one
+    setPreviewMessage(null);
+  }
+
+  function toggleMic() {
+    const Recognition = getRecognition();
+    if (!Recognition) return;
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const r = new Recognition();
+    r.lang = micLang;
+    r.interimResults = false;
+    r.onresult = (e) => {
+      const said = Array.from(e.results)
+        .map((res) => res[0].transcript)
+        .join(" ");
+      setDescription((d) => (d.trim() ? `${d.trim()} ${said}` : said));
+    };
+    r.onend = () => setListening(false);
+    r.onerror = () => setListening(false);
+    recognitionRef.current = r;
+    setListening(true);
+    r.start();
+  }
+
+  async function makePreview() {
+    if (!job) return;
+    setPreviewing(true);
+    setPreview(null);
+    setPreviewMessage(null);
+    const data = await postJson<PreviewResponse>(
+      "/api/preview",
+      {
+        roleTitle: job.roleTitle,
+        pay: job.pay,
+        area: job.area,
+        shift: job.shift,
+        openings: job.openings,
+        accommodation: ACCOMMODATION_OPTIONS.find((o) => o.key === accommodation)?.card ?? "",
+        mustHaves: job.mustHaves.map((m) => m.label),
+      },
+      16_000,
+    );
+    setPreviewing(false);
+    if (data.status === "error") setPreviewMessage({ tone: "red", text: data.message });
+    else setPreview({ marathi: data.marathi, hindi: data.hindi });
+  }
+
+  // The demo job uses the built-in samples; any other job gets AI-written ones that fit it.
   async function loadSamples() {
     if (!job) return;
-    setLoadingSamples(true);
     setRankMessage(null);
     setResult(null);
+    setSamplesNote(null);
+    const showBuiltInSamples = () => {
+      setReplies(BUILT_IN_SAMPLES);
+      setFromSamples(true);
+      setSamplesNote("Showing built-in wine shop samples");
+    };
+    if (job.description === DEMO_JOB_LINE) return showBuiltInSamples();
+
+    setLoadingSamples(true);
     const data = await postJson<SamplesResponse>(
       "/api/samples",
-      { jobTitle: job.jobTitle, mustHaves: job.mustHaves },
-      14_000,
+      { roleTitle: job.roleTitle, pay: job.pay, area: job.area, shift: job.shift, mustHaves: job.mustHaves.map((m) => m.label) },
+      16_000,
     );
     setLoadingSamples(false);
-    if (data.status === "error") {
-      setRankMessage({ tone: "red", text: data.message });
-      return;
-    }
+    if (data.status === "error") return showBuiltInSamples();
     setReplies(data.text);
+    setFromSamples(true);
   }
 
   async function rank() {
     if (!job) return;
-    const { applicants, truncated } = splitApplicants(replies);
+    setRankMessage(null);
+    setResult(null); // never leave old results next to new replies or an error
+    setHiredId(null);
+
+    const { applicants, tooMany } = splitApplicants(replies);
     if (applicants.length === 0) {
-      setRankMessage({
-        tone: "yellow",
-        text: "Please paste replies or tap Load sample applicants",
-      });
-      setResult(null);
+      setRankMessage({ tone: "yellow", text: "Please paste replies or tap Load sample applicants" });
+      return;
+    }
+    if (tooMany) {
+      setRankMessage({ tone: "yellow", text: "Please paste up to 30 replies at a time." });
       return;
     }
 
-    const usable = applicants.filter((a) => !a.junk);
-    setRankMessage(null);
-    setResult(null); // never leave old results next to new replies or an error
     let checked: Extract<RankResponse, { status: "ok" }>["results"] = [];
-
+    const usable = applicants.filter((a) => !a.junkReason);
     // Only call the AI when at least one reply is worth checking.
     if (usable.length > 0) {
       setRanking(true);
       const data = await postJson<RankResponse>(
         "/api/rank",
         {
-          jobTitle: job.jobTitle,
-          mustHaves: job.mustHaves,
+          roleTitle: job.roleTitle,
+          mustHaves: job.mustHaves.map(({ id, label }) => ({ id, label })),
           applicants: usable.map(({ id, text }) => ({ id, text })),
         },
-        19_000,
+        21_000,
       );
       setRanking(false);
       if (data.status === "error") {
@@ -209,182 +371,475 @@ export default function Home() {
       }
       checked = data.results;
     }
-
-    setResult(buildRanking(applicants, checked, job.mustHaves, job.jobTitle, truncated));
+    setResult(buildRanking(applicants, checked, job.mustHaves, job.roleTitle, interviewTime));
   }
 
+  const accommodationCard = ACCOMMODATION_OPTIONS.find((o) => o.key === accommodation)?.card;
+  const post = job ? fullPost(job, accommodation) : "";
+  const copyPostText = job
+    ? `${post}\n\nPlease reply with your name, phone number and answers:\n${job.questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
+    : "";
+  const previewText = preview ? preview[previewTab] : "";
+  const previewVoice = findVoice(voices, previewTab === "marathi" ? "mr" : "hi");
+
   return (
-    <main className="mx-auto flex w-full max-w-md flex-col gap-8 bg-white px-4 py-6 text-zinc-900">
-      <header>
-        <h1 className="text-2xl font-bold">Hire Helper</h1>
-        <p className="text-sm text-zinc-600">
-          Describe the job, share the post, then rank your applicants.
-        </p>
+    <div className="flex flex-1 flex-col">
+      {/* ---- Header ---- */}
+      <header className="border-b border-brand-100 bg-white/70 px-4 pb-5 pt-6">
+        <div className="mx-auto max-w-[480px]">
+          <div className="flex items-start justify-between gap-3">
+            <Logo />
+            <span className="mt-2 rounded-full bg-go-50 px-3 py-1 text-center text-xs font-semibold leading-snug text-go-700 ring-1 ring-go-100">
+              एक रुपया फीस नहीं · No fee for workers
+            </span>
+          </div>
+          <p className="mt-3 text-[18px] font-semibold leading-snug">स्टाफ पक्का, काम पक्का</p>
+          <p className="text-sm text-muted">Trusted staff. Confirmed jobs.</p>
+          <p className="mt-3 text-base font-medium text-brand-700">A shortlist of 3 trusted workers, not 40 random calls.</p>
+          <Stepper current={step} />
+        </div>
       </header>
 
-      {/* ---- Section 1: Describe the job ---- */}
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">1. Describe the job</h2>
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          rows={3}
-          placeholder="e.g. Need a helper for my two-wheeler garage in Pune, ₹15,000 a month, 6 days a week, must know basic servicing and have a two-wheeler licence"
-          className="rounded-lg border border-zinc-300 p-3 text-base"
-        />
-        <button
-          onClick={createPost}
-          disabled={creating}
-          className={`${button} bg-zinc-900 text-white`}
-        >
-          {creating ? "Creating…" : "Create post"}
-        </button>
-        <Notice message={postMessage} />
+      <main className="mx-auto flex w-full max-w-[480px] flex-col gap-5 px-4 py-5">
+        {/* ================= STEP 1 ================= */}
+        <Card>
+          <StepTitle step={1} title="Describe the job" hint="One line is enough: the role, pay and area." />
 
-        {job && (
-          <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-3">
-            <p className="whitespace-pre-wrap text-sm">{job.post}</p>
+          <div className="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1">
+            {EXAMPLES.map((ex) => (
+              <button
+                key={ex.label}
+                type="button"
+                onClick={() => setDescription(ex.text)}
+                className="min-h-11 shrink-0 rounded-full border border-brand-200 bg-brand-50 px-4 text-sm font-semibold text-brand-700 hover:bg-brand-100"
+              >
+                {ex.label}
+              </button>
+            ))}
+          </div>
 
-            <div>
-              <h3 className="text-sm font-semibold">Must-haves (used for ranking)</h3>
-              <ul className="list-disc pl-5 text-sm">
-                {job.mustHaves.map((m) => (
-                  <li key={m}>{m}</li>
+          <label htmlFor="job" className="sr-only">
+            Job description
+          </label>
+          <textarea
+            id="job"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="e.g. Need a delivery rider in Pune, ₹15,000 a month, 6 days a week, must have a bike and licence"
+            className="w-full rounded-2xl border-2 border-brand-100 bg-white p-4 text-base leading-relaxed outline-none transition placeholder:text-slate-400 focus:border-brand-500"
+          />
+          <div className="mb-3 mt-1 flex items-center justify-between gap-3 text-sm text-muted">
+            {micSupported ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleMic}
+                  aria-label={listening ? "Stop voice input" : "Speak the job"}
+                  className={`flex h-11 w-11 items-center justify-center rounded-full ${listening ? "animate-pulse bg-stamp text-white" : "bg-brand-50 text-brand-700 ring-1 ring-brand-200"}`}
+                >
+                  <MicIcon />
+                </button>
+                <select
+                  value={micLang}
+                  onChange={(e) => setMicLang(e.target.value)}
+                  aria-label="Voice language"
+                  className="h-11 rounded-xl border border-brand-200 bg-white px-2 text-sm"
+                >
+                  {MIC_LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <span />
+            )}
+            <span className={`shrink-0 ${description.length > MAX_DESCRIPTION_CHARS ? "font-bold text-danger" : ""}`}>
+              {description.length}/{MAX_DESCRIPTION_CHARS}
+            </span>
+          </div>
+
+          <button onClick={createPost} disabled={creating} className={`${primaryButton} w-full`}>
+            {creating && <Spinner />}
+            {creating ? "Writing your post… (up to 15 seconds)" : "Create post"}
+          </button>
+
+          <div aria-live="polite" className="mt-3 flex flex-col gap-2">
+            <Notice message={postMessage} />
+            {missing.length > 0 && (
+              <ul className="flex flex-col gap-2">
+                {missing.map((m) => (
+                  <li key={m} className="flex items-center gap-2 rounded-xl bg-marigold-100/60 px-3 py-2 text-sm">
+                    <span className="rounded-full bg-marigold-400 px-2 py-0.5 text-xs font-bold capitalize text-ink">{m}</span>
+                    <span className="text-marigold-800">{MISSING_HINT[m]}</span>
+                  </li>
                 ))}
               </ul>
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold">Screening questions</h3>
-              <ol className="list-decimal pl-5 text-sm">
-                {job.questions.map((q) => (
-                  <li key={q}>{q}</li>
-                ))}
-              </ol>
-            </div>
-
-            <button onClick={copyPost} className={`${button} bg-zinc-100 text-zinc-900`}>
-              {copyState === "copied" ? "Copied!" : "Copy"}
-            </button>
-            {copyState === "failed" && (
-              <Notice
-                message={{
-                  tone: "yellow",
-                  text: "Couldn't copy. Press and hold the text to copy it.",
-                }}
-              />
             )}
           </div>
-        )}
-      </section>
+        </Card>
 
-      {/* ---- Section 2: Applicants ---- */}
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">2. Rank applicants</h2>
-        <textarea
-          value={replies}
-          onChange={(e) => setReplies(e.target.value)}
-          rows={8}
-          placeholder="Paste replies here. Leave a blank line between each applicant."
-          className="rounded-lg border border-zinc-300 p-3 text-base"
-        />
-        <div className="flex gap-2">
-          <button
-            onClick={loadSamples}
-            disabled={!job || loadingSamples || ranking}
-            className={`${button} flex-1 bg-zinc-100 text-zinc-900`}
-          >
+        {/* ---- Job card, post, questions, preview ---- */}
+        {job && (
+          <div ref={postRef} className="flex scroll-mt-4 flex-col gap-5">
+            <Card>
+              <h2 className="mb-3 text-xl font-bold">Job card</h2>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-base">
+                {[
+                  ["Role", job.roleTitle],
+                  ["Openings", String(job.openings)],
+                  ["Area", job.area],
+                  ["Shift/hours", job.shift || "Not given"],
+                  ["Pay", job.pay],
+                  ["Accommodation", accommodationCard ?? "Not answered yet"],
+                ].map(([k, v]) => (
+                  <div key={k} className="contents">
+                    <dt className="text-muted">{k}</dt>
+                    <dd className="font-semibold">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+
+              <h3 className="mb-2 mt-5 text-base font-bold">Must-haves</h3>
+              <ul className="flex flex-col gap-2">
+                {job.mustHaves.map((m) => (
+                  <li key={m.id} className="flex items-center gap-2 rounded-xl bg-brand-50 px-3 py-2 text-base">
+                    <span className="flex-1">{m.label}</span>
+                    {m.source === "suggested" && (
+                      <>
+                        <span className="rounded-full bg-marigold-100 px-2 py-0.5 text-xs font-bold text-marigold-800">Suggested</span>
+                        {job.mustHaves.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeMustHave(m.id)}
+                            aria-label={`Remove ${m.label}`}
+                            className="flex h-11 w-11 items-center justify-center rounded-full text-lg text-muted hover:bg-white"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-sm text-muted">ℹ️ {LEGAL_NOTE}</p>
+
+              {/* The one follow-up question: plain code, no AI call. */}
+              <h3 className="mb-2 mt-5 text-base font-bold">Is accommodation provided?</h3>
+              <div className="grid grid-cols-2 gap-2">
+                {ACCOMMODATION_OPTIONS.map((o) => (
+                  <button
+                    key={o.key}
+                    type="button"
+                    onClick={() => chooseAccommodation(o.key)}
+                    aria-pressed={accommodation === o.key}
+                    className={`min-h-12 rounded-xl px-3 py-2 text-sm font-semibold ring-1 ${
+                      accommodation === o.key ? "bg-brand-600 text-white ring-brand-600" : "bg-white text-brand-700 ring-brand-200 hover:bg-brand-50"
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </Card>
+
+            <Card>
+              <h2 className="mb-3 text-xl font-bold">Your job post</h2>
+              <div className="chat-wall rounded-2xl p-3">
+                <div className="ml-auto max-w-[94%] rounded-2xl rounded-tr-sm bg-go-50 p-3 shadow-sm ring-1 ring-go-100">
+                  <p className="whitespace-pre-wrap text-base leading-relaxed">{post}</p>
+                </div>
+              </div>
+
+              <h3 className="mb-2 mt-5 text-base font-bold">Screening questions</h3>
+              <ol className="flex flex-col gap-2">
+                {job.questions.map((q, i) => (
+                  <li key={q} className="flex gap-3 rounded-xl bg-slate-50 px-3 py-2 text-base">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-600 text-sm font-bold text-white">
+                      {i + 1}
+                    </span>
+                    <span>{q}</span>
+                  </li>
+                ))}
+              </ol>
+
+              <div className="mt-5">
+                <CopyButton text={copyPostText} label="Copy post" />
+              </div>
+            </Card>
+
+            <Card>
+              <h2 className="text-xl font-bold">For village candidates</h2>
+              <p className="mb-3 mt-1 text-base text-muted">A short job preview in Marathi and Hindi to send to village groups.</p>
+              <button onClick={makePreview} disabled={previewing} className={`${secondaryButton} w-full`}>
+                {previewing && <Spinner />}
+                {previewing ? "Making preview… (up to 15 seconds)" : "Make job preview for village candidates"}
+              </button>
+              <div aria-live="polite" className="mt-3">
+                <Notice message={previewMessage} />
+              </div>
+              {preview && (
+                <div className="rise-in mt-3">
+                  <div role="tablist" className="mb-3 grid grid-cols-2 gap-2">
+                    {(["marathi", "hindi"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        role="tab"
+                        aria-selected={previewTab === tab}
+                        onClick={() => setPreviewTab(tab)}
+                        className={`min-h-11 rounded-xl text-base font-bold ${previewTab === tab ? "bg-brand-600 text-white" : "bg-brand-50 text-brand-700"}`}
+                      >
+                        {tab === "marathi" ? "मराठी" : "हिंदी"}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="whitespace-pre-wrap rounded-2xl bg-slate-50 p-4 text-base leading-relaxed">{previewText}</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {previewVoice ? (
+                      <button type="button" onClick={() => speak(previewText, previewVoice)} className={secondaryButton}>
+                        🔊 Listen
+                      </button>
+                    ) : (
+                      <p className="flex items-center justify-center rounded-xl bg-slate-100 px-3 text-center text-sm text-muted">
+                        Audio not available on this phone
+                      </p>
+                    )}
+                    <a href={whatsappShareLink(previewText)} target="_blank" rel="noopener noreferrer" className={whatsappButton}>
+                      <ChatIcon />
+                      Share on WhatsApp
+                    </a>
+                  </div>
+                  <div className="mt-2">
+                    <CopyButton text={previewText} label="Copy" />
+                  </div>
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* ================= STEP 2 ================= */}
+        <Card className={job ? "" : "opacity-70"}>
+          <StepTitle
+            step={2}
+            title="Add applicants' replies"
+            hint="Paste all replies at once. Put a blank line between people, or paste a copied WhatsApp chat."
+          />
+          {!job && <p className="mb-3 rounded-xl bg-slate-100 px-4 py-3 text-base font-medium text-muted">🔒 Create a job post first.</p>}
+
+          <label htmlFor="replies" className="sr-only">
+            Applicants&apos; replies
+          </label>
+          <textarea
+            id="replies"
+            value={replies}
+            onChange={(e) => {
+              setReplies(e.target.value);
+              setFromSamples(false); // the owner's own replies need their consent tick
+              setSamplesNote(null);
+            }}
+            rows={8}
+            disabled={!job}
+            className="w-full rounded-2xl border-2 border-brand-100 bg-white p-4 text-base leading-relaxed outline-none transition focus:border-brand-500 disabled:bg-slate-50"
+          />
+          <p className="mb-3 mt-1 text-sm text-muted">
+            {replyCount > 0 ? `📋 ${replyCount} ${replyCount === 1 ? "reply" : "replies"} found` : "No replies yet? Load samples to try it."}
+            {samplesNote && <span className="ml-2 font-semibold text-marigold-800">· {samplesNote}</span>}
+          </p>
+
+          <button onClick={loadSamples} disabled={!job || loadingSamples || ranking} className={`${secondaryButton} w-full`}>
+            {loadingSamples && <Spinner />}
             {loadingSamples ? "Loading samples…" : "Load sample applicants"}
           </button>
+
+          <label htmlFor="when" className="mb-1 mt-4 block text-base font-semibold">
+            Interview time (optional)
+          </label>
+          <input
+            id="when"
+            value={interviewTime}
+            onChange={(e) => setInterviewTime(e.target.value)}
+            disabled={!job}
+            placeholder="e.g. tomorrow at 11 am"
+            className="h-12 w-full rounded-xl border-2 border-brand-100 bg-white px-4 text-base outline-none focus:border-brand-500 disabled:bg-slate-50"
+          />
+
+          {/* Privacy (India's DPDP Act): say where replies go, and get consent for real ones. */}
+          <p className="mt-4 rounded-xl bg-brand-50 px-3 py-2 text-sm text-brand-900">
+            🔐 Replies are sent to Google&apos;s Gemini AI to be ranked and are not saved by Kaam Pakka.
+          </p>
+          {needsConsent && (
+            <label className="mt-3 flex min-h-11 items-start gap-3 text-base">
+              <input
+                type="checkbox"
+                checked={consent}
+                onChange={(e) => setConsent(e.target.checked)}
+                className="mt-1 h-5 w-5 shrink-0 accent-brand-600"
+              />
+              <span>These applicants agreed to share their replies with me for this job.</span>
+            </label>
+          )}
+
           <button
             onClick={rank}
-            disabled={!job || ranking || loadingSamples}
-            className={`${button} flex-1 bg-zinc-900 text-white`}
+            disabled={!job || ranking || loadingSamples || (needsConsent && !consent)}
+            className={`${primaryButton} mt-4 w-full`}
           >
-            {ranking ? "Ranking…" : "Rank"}
+            {ranking && <Spinner />}
+            {ranking ? "Checking each applicant… (up to 20 seconds)" : "Rank applicants"}
           </button>
-        </div>
-        {!job && <p className="text-sm text-zinc-500">Create a job post first.</p>}
-        <Notice message={rankMessage} />
+          <div aria-live="polite" className="mt-3">
+            <Notice message={rankMessage} />
+          </div>
+        </Card>
 
+        {/* ================= STEP 3 ================= */}
         {result && (
-          <div className="flex flex-col gap-3">
-            {result.notes.map((note) => (
-              <Notice key={note} message={{ tone: "yellow", text: note }} />
+          <div ref={resultRef} aria-live="polite" className="flex scroll-mt-4 flex-col gap-4">
+            <div className="flex items-start gap-3 px-1">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-marigold-400 text-base font-bold text-ink">3</span>
+              <h2 className="text-xl font-bold leading-tight">Your top 3</h2>
+            </div>
+
+            {result.notes.map((n) => (
+              <Notice key={n} message={{ tone: "yellow", text: n }} />
             ))}
 
             {result.top.map((card, i) => (
-              <article
+              <ResultCard
                 key={card.id}
-                className="flex flex-col gap-2 rounded-lg border border-zinc-200 p-3"
-              >
-                <div className="flex items-baseline justify-between">
-                  <h3 className="font-semibold">
-                    #{i + 1} {card.name}
-                  </h3>
-                  <span className="text-lg font-bold">{card.score}/100</span>
-                </div>
-                <p className="text-sm">{card.reason}</p>
-                <ul className="text-sm">
-                  {card.verdicts.map((v) => (
-                    <li key={v.mustHave}>
-                      <span className={`font-bold ${VERDICT_MARK[v.result].className}`}>
-                        {VERDICT_MARK[v.result].icon}
-                      </span>{" "}
-                      {v.mustHave}
-                      {v.evidence && (
-                        <span className="text-zinc-500"> — “{v.evidence}”</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                <details className="text-sm text-zinc-600">
-                  <summary>Their reply</summary>
-                  <p className="mt-1 whitespace-pre-wrap">{card.text}</p>
-                </details>
-                {card.whatsapp ? (
-                  <a
-                    href={card.whatsapp}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={`${button} bg-green-600 text-center text-white`}
-                  >
-                    Send WhatsApp reminder
-                  </a>
-                ) : (
-                  <p className="text-sm text-zinc-500">No phone number found</p>
-                )}
-              </article>
+                card={card}
+                rank={i + 1}
+                hired={hiredId === card.id}
+                onHired={() => setHiredId(hiredId === card.id ? null : card.id)}
+              />
             ))}
 
-            {result.notEnoughInfo.length > 0 && (
-              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-zinc-500">
-                <h3 className="text-sm font-semibold">Not enough info</h3>
-                <ul className="mt-1 flex flex-col gap-1 text-sm">
-                  {result.notEnoughInfo.map((a) => (
-                    <li key={a.id} className="whitespace-pre-wrap">
-                      {a.text}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {result.top.length > 0 && (
+              <p className="px-1 text-sm text-muted">⚖️ Ranked only on job skills and availability — never on caste, religion or native place.</p>
             )}
 
-            {result.unchecked.length > 0 && (
-              <div className="rounded-lg border border-zinc-200 p-3 text-zinc-500">
-                <h3 className="text-sm font-semibold">Couldn&apos;t check</h3>
-                <ul className="mt-1 flex flex-col gap-1 text-sm">
-                  {result.unchecked.map((a) => (
-                    <li key={a.id} className="whitespace-pre-wrap">
-                      {a.text}
+            {[...result.notEnoughInfo, ...result.unchecked].length > 0 && (
+              <details className="rounded-3xl bg-white/70 p-5 ring-1 ring-slate-200">
+                <summary className="cursor-pointer text-base font-bold text-muted">
+                  Not enough info ({result.notEnoughInfo.length + result.unchecked.length})
+                </summary>
+                <ul className="mt-3 flex flex-col gap-2 text-sm">
+                  {[...result.notEnoughInfo, ...result.unchecked].map((n) => (
+                    <li key={n.id} className="rounded-xl bg-slate-50 px-3 py-2">
+                      <span className="block text-ink">{n.preview}</span>
+                      <span className="text-muted">Why: {n.why}</span>
                     </li>
                   ))}
                 </ul>
-              </div>
+              </details>
             )}
           </div>
         )}
-      </section>
-    </main>
+      </main>
+
+      <footer className="mt-auto bg-brand-900 px-4 py-4 text-center text-sm font-medium text-white">
+        Pay only when a worker joins · Free replacement within 30 days · Workers never pay a fee
+      </footer>
+    </div>
+  );
+}
+
+function ResultCard({ card, rank, hired, onHired }: { card: RankedCard; rank: number; hired: boolean; onHired: () => void }) {
+  return (
+    <article
+      className={`rise-in rounded-3xl bg-white p-5 shadow-[0_8px_30px_rgba(20,43,110,0.08)] ring-1 ${rank === 1 ? "ring-2 ring-marigold-400" : "ring-brand-100"}`}
+      style={{ animationDelay: `${(rank - 1) * 80}ms` }}
+    >
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 text-lg font-bold text-white">
+          {rank}
+        </span>
+        <h3 className="min-w-0 flex-1 truncate text-lg font-bold">{card.name}</h3>
+        <ScoreRing score={card.score} />
+      </div>
+
+      <p className="mt-3 text-base leading-relaxed">{card.reason}</p>
+
+      <ul className="mt-3 flex flex-col gap-2">
+        {card.checks.map((c) => (
+          <li key={c.label} className="flex gap-3 text-base">
+            <span
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full font-bold ${STATUS_STYLE[c.status].chip}`}
+              title={STATUS_STYLE[c.status].label}
+            >
+              {STATUS_STYLE[c.status].icon}
+            </span>
+            <span className="min-w-0">
+              <span className="font-medium">{c.label}</span>
+              <span className="block text-sm italic text-muted">{c.proof ? `“${c.proof}”` : "No proof found"}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      {card.strengths.length > 0 && (
+        <ul className="mt-3 flex flex-col gap-1">
+          {card.strengths.map((s) => (
+            <li key={s.text} className="text-sm">
+              <span className="font-semibold text-go-700">+ {s.text}</span>{" "}
+              <span className="italic text-muted">“{s.proof}”</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(card.canJoin || card.stay) && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {card.canJoin && (
+            <span className="rounded-full bg-brand-50 px-3 py-1 text-sm text-brand-900 ring-1 ring-brand-100" title={`“${card.canJoin.proof}”`}>
+              📅 Can join: {card.canJoin.text}
+            </span>
+          )}
+          {card.stay && (
+            <span className="rounded-full bg-brand-50 px-3 py-1 text-sm text-brand-900 ring-1 ring-brand-100" title={`“${card.stay.proof}”`}>
+              🏠 Stay: {card.stay.text}
+            </span>
+          )}
+        </div>
+      )}
+
+      <details className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-base">
+        <summary className="cursor-pointer font-medium text-brand-700">Show original reply</summary>
+        <p className="mt-2 whitespace-pre-wrap text-muted">{card.text}</p>
+      </details>
+
+      {card.whatsapp ? (
+        <div className="mt-4 flex flex-col gap-2">
+          <a href={card.whatsapp} target="_blank" rel="noopener noreferrer" className={`${whatsappButton} w-full`}>
+            <ChatIcon />
+            Send WhatsApp reminder
+          </a>
+          <button type="button" onClick={onHired} className={`${secondaryButton} w-full`}>
+            {hired ? "Hide check-in message" : "Mark as hired"}
+          </button>
+          {hired && card.phone && (
+            <div className="rise-in rounded-xl bg-go-50 p-3 text-sm ring-1 ring-go-100">
+              <p className="font-semibold">Day-7 check-in message (send it after their first week):</p>
+              <p className="mt-1 italic">{checkInMessage(card.name.startsWith("Applicant ") ? "" : card.name)}</p>
+              <a
+                href={whatsappLink(card.phone, checkInMessage(card.name.startsWith("Applicant ") ? "" : card.name))}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${whatsappButton} mt-2 w-full`}
+              >
+                <ChatIcon />
+                Send check-in on WhatsApp
+              </a>
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="mt-4 text-center text-base text-slate-400">No phone number found</p>
+      )}
+    </article>
   );
 }
