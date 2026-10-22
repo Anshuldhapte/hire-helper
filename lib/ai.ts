@@ -2,18 +2,18 @@ import { ApiError, GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import type { ErrorResponse } from "./schemas";
 
-// Lite is fast (a few seconds) and steady on the free plan, which keeps us inside the 15s/20s limits.
-export const MODEL = "gemini-flash-lite-latest";
-// Used when the main model is busy (free-plan "high demand" errors).
-const BACKUP_MODEL = "gemini-3.5-flash";
+// Free-plan speed jumps around (2s one minute, 20s the next), so every question goes to
+// both models at once and the first good answer wins. Each model has its own free quota.
+const MODELS = ["gemini-3.5-flash", "gemini-flash-lite-latest"];
 
 class MissingKeyError extends Error {}
 
 // Thrown when the AI answers but the answer isn't usable (wrong shape, too few questions).
 export class BadAiAnswerError extends Error {}
 
-// Asks Gemini for JSON in the shape of `schema`, then checks the answer with zod.
-// The key is read from .env.local (or Vercel's settings). It never leaves the server.
+// Asks Gemini for JSON in the shape of `schema`, checks the answer with zod, and
+// always finishes within `timeoutMs`. The key is read from .env.local (or Vercel's
+// settings) and never leaves the server.
 export async function askForJson<T extends z.ZodType>(options: {
   system: string;
   prompt: string;
@@ -25,8 +25,10 @@ export async function askForJson<T extends z.ZodType>(options: {
 
   const jsonSchema = z.toJSONSchema(options.schema);
   delete jsonSchema.$schema; // Gemini only needs the shape itself
-  const call = (model: string) =>
-    new GoogleGenAI({ apiKey }).models.generateContent({
+  const stopOthers = new AbortController();
+
+  const ask = async (model: string): Promise<z.infer<T>> => {
+    const response = await new GoogleGenAI({ apiKey }).models.generateContent({
       model,
       contents: options.prompt,
       config: {
@@ -34,31 +36,37 @@ export async function askForJson<T extends z.ZodType>(options: {
         responseMimeType: "application/json",
         responseJsonSchema: jsonSchema,
         // Short thinking keeps answers fast; these are simple checks.
-        thinkingConfig: model === MODEL ? { thinkingLevel: ThinkingLevel.LOW } : undefined,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        abortSignal: stopOthers.signal,
         httpOptions: { timeout: options.timeoutMs },
       },
     });
+    let data: unknown;
+    try {
+      data = JSON.parse(response.text ?? "");
+    } catch {
+      throw new BadAiAnswerError(`${model}: answer was not JSON`);
+    }
+    const parsed = options.schema.safeParse(data);
+    if (!parsed.success) throw new BadAiAnswerError(`${model}: ${parsed.error.message}`);
+    console.info(`Answered by ${model}`);
+    return parsed.data;
+  };
 
-  // If the main model is busy (5xx), ask the backup model straight away.
-  let response;
   try {
-    response = await call(MODEL);
+    return await Promise.any(MODELS.map(ask));
   } catch (err) {
-    if (!(err instanceof ApiError && err.status >= 500)) throw err;
-    console.warn(`${MODEL} busy (${err.status}), using ${BACKUP_MODEL}`);
-    response = await call(BACKUP_MODEL);
+    // Every model failed: report the first one's error, which explains the most.
+    const first = err instanceof AggregateError ? err.errors[0] : err;
+    console.warn("All models failed:", err instanceof AggregateError ? err.errors : err);
+    throw first;
+  } finally {
+    stopOthers.abort(); // cancel the slower request once we have an answer
   }
-
-  let data: unknown;
-  try {
-    data = JSON.parse(response.text ?? "");
-  } catch {
-    throw new BadAiAnswerError("answer was not JSON");
-  }
-  const parsed = options.schema.safeParse(data);
-  if (!parsed.success) throw new BadAiAnswerError(parsed.error.message);
-  return parsed.data;
 }
+
+// Models sometimes send line breaks as the two characters "\n"; turn them into real ones.
+export const fixLineBreaks = (text: string) => text.replace(/\\n/g, "\n");
 
 export function errorResponse(message: string, status: number) {
   return Response.json({ status: "error", message } satisfies ErrorResponse, {
@@ -96,5 +104,5 @@ export function aiErrorResponse(err: unknown) {
     );
   }
   console.error("AI call failed:", err);
-  return errorResponse("Couldn't reach the AI. Please try again.", 502);
+  return errorResponse("The AI is busy right now. Please try again.", 502);
 }

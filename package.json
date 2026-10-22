@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "set-key": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/set-gemini-key.ps1"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",

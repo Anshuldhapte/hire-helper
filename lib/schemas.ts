@@ -30,6 +30,7 @@ export const RankAiSchema = z.object({
       id: z.string(),
       name: z.string(),
       enoughInfo: z.boolean(),
+      strengths: z.array(z.string()),
       verdicts: z.array(
         z.object({
           mustHave: z.number().int(),
@@ -40,7 +41,15 @@ export const RankAiSchema = z.object({
   ),
 });
 
-// ---- What the page sends to the rank route ----
+// AI call 3: realistic practice replies for the job on screen.
+export const SamplesAiSchema = z.object({ replies: z.array(z.string()) });
+
+// ---- What the page sends to the rank and samples routes ----
+
+export const SamplesRequestSchema = z.object({
+  jobTitle: z.string().trim().min(1).max(200),
+  mustHaves: z.array(z.string().trim().min(1).max(200)).min(1).max(8),
+});
 
 export const RankRequestSchema = z.object({
   jobTitle: z.string().trim().min(1).max(200),
@@ -74,12 +83,16 @@ export type CreatePostResponse =
   | ErrorResponse;
 
 // `verdicts` lines up with the job's must-haves list, one entry each.
+// `strengths` are up to 2 extra plus points, used to break ties.
 export type CheckedApplicant = {
   id: string;
   name: string;
   enoughInfo: boolean;
+  strengths: string[];
   verdicts: Verdict[];
 };
+
+export type SamplesResponse = { status: "ok"; text: string } | ErrorResponse;
 
 export type RankResponse =
   | { status: "ok"; results: CheckedApplicant[] }

@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { buildRanking, splitApplicants, type Ranking } from "@/lib/applicants";
-import { SAMPLE_APPLICANTS } from "@/lib/sampleApplicants";
 import {
   MAX_DESCRIPTION_CHARS,
   type CreatePostResponse,
   type Job,
   type RankResponse,
+  type SamplesResponse,
   type Verdict,
 } from "@/lib/schemas";
 
@@ -15,13 +15,15 @@ type Message = { tone: "yellow" | "red"; text: string } | null;
 
 const NETWORK_ERROR = "Couldn't reach the AI. Please try again.";
 
-// POSTs JSON and always resolves to a response shape, even if the network or server fails.
-async function postJson<T>(url: string, body: unknown): Promise<T> {
+// POSTs JSON and always resolves to a response shape, even if the network or server
+// fails. Gives up after `timeoutMs`, so the owner is never left waiting.
+async function postJson<T>(url: string, body: unknown, timeoutMs: number): Promise<T> {
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return (await res.json()) as T;
   } catch {
@@ -84,6 +86,7 @@ export default function Home() {
 
   const [replies, setReplies] = useState("");
   const [ranking, setRanking] = useState(false);
+  const [loadingSamples, setLoadingSamples] = useState(false);
   const [rankMessage, setRankMessage] = useState<Message>(null);
   const [result, setResult] = useState<Ranking | null>(null);
 
@@ -103,9 +106,11 @@ export default function Home() {
 
     setCreating(true);
     setPostMessage(null);
-    const data = await postJson<CreatePostResponse>("/api/create-post", {
-      description: text,
-    });
+    const data = await postJson<CreatePostResponse>(
+      "/api/create-post",
+      { description: text },
+      14_000,
+    );
     setCreating(false);
 
     if (data.status === "error") {
@@ -149,6 +154,25 @@ export default function Home() {
     }
   }
 
+  // Practice replies written for the job on screen (plus 2 junk replies added by the server).
+  async function loadSamples() {
+    if (!job) return;
+    setLoadingSamples(true);
+    setRankMessage(null);
+    setResult(null);
+    const data = await postJson<SamplesResponse>(
+      "/api/samples",
+      { jobTitle: job.jobTitle, mustHaves: job.mustHaves },
+      14_000,
+    );
+    setLoadingSamples(false);
+    if (data.status === "error") {
+      setRankMessage({ tone: "red", text: data.message });
+      return;
+    }
+    setReplies(data.text);
+  }
+
   async function rank() {
     if (!job) return;
     const { applicants, truncated } = splitApplicants(replies);
@@ -163,16 +187,21 @@ export default function Home() {
 
     const usable = applicants.filter((a) => !a.junk);
     setRankMessage(null);
+    setResult(null); // never leave old results next to new replies or an error
     let checked: Extract<RankResponse, { status: "ok" }>["results"] = [];
 
     // Only call the AI when at least one reply is worth checking.
     if (usable.length > 0) {
       setRanking(true);
-      const data = await postJson<RankResponse>("/api/rank", {
-        jobTitle: job.jobTitle,
-        mustHaves: job.mustHaves,
-        applicants: usable.map(({ id, text }) => ({ id, text })),
-      });
+      const data = await postJson<RankResponse>(
+        "/api/rank",
+        {
+          jobTitle: job.jobTitle,
+          mustHaves: job.mustHaves,
+          applicants: usable.map(({ id, text }) => ({ id, text })),
+        },
+        19_000,
+      );
       setRanking(false);
       if (data.status === "error") {
         setRankMessage({ tone: "red", text: data.message });
@@ -261,14 +290,15 @@ export default function Home() {
         />
         <div className="flex gap-2">
           <button
-            onClick={() => setReplies(SAMPLE_APPLICANTS)}
+            onClick={loadSamples}
+            disabled={!job || loadingSamples || ranking}
             className={`${button} flex-1 bg-zinc-100 text-zinc-900`}
           >
-            Load sample applicants
+            {loadingSamples ? "Loading samples…" : "Load sample applicants"}
           </button>
           <button
             onClick={rank}
-            disabled={!job || ranking}
+            disabled={!job || ranking || loadingSamples}
             className={`${button} flex-1 bg-zinc-900 text-white`}
           >
             {ranking ? "Ranking…" : "Rank"}

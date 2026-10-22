@@ -20,8 +20,12 @@ const PHONE_PATTERN = /(?:^|\D)(?:\+?91[\s-]*|0)?([6-9](?:[\s-]*\d){9})(?!\d)/;
 const HAS_LETTER = /[a-zA-Zऀ-ॿ]/;
 const MIN_WORDS = 3;
 
+// Marathi/Hindi keyboards type digits as ०१२३४५६७८९; read them as 0–9.
+const toLatinDigits = (text: string) =>
+  text.replace(/[०-९]/g, (d) => String(d.charCodeAt(0) - 0x0966));
+
 export function findPhone(text: string): string | null {
-  const match = text.match(PHONE_PATTERN);
+  const match = toLatinDigits(text).match(PHONE_PATTERN);
   return match ? "91" + match[1].replace(/\D/g, "") : null;
 }
 
@@ -29,11 +33,41 @@ function wordsWithLetters(text: string) {
   return text.split(/\s+/).filter((word) => HAS_LETTER.test(word));
 }
 
+// A message line copied from WhatsApp, on iPhone or Android:
+//   [22/10/26, 4:12 pm] +91 98901 23456: Hi sir...
+//   22/10/26, 4:12 pm - Rohit: Hi sir...
+const WHATSAPP_LINE =
+  /^\[?\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?\]?\s*(?:-\s*)?([^:]{1,60}):\s*(.*)$/i;
+
+// Copied WhatsApp chats have no blank lines, so group the messages by who sent them.
+function splitWhatsAppChat(lines: string[]) {
+  const bySender = new Map<string, string[]>();
+  let current: string[] | null = null;
+  for (const line of lines) {
+    const match = line.match(WHATSAPP_LINE);
+    if (match) {
+      const sender = match[1].trim();
+      if (!bySender.has(sender)) bySender.set(sender, []);
+      current = bySender.get(sender)!;
+      if (match[2].trim()) current.push(match[2].trim());
+    } else if (current && line.trim()) {
+      current.push(line.trim()); // a message that runs over several lines
+    }
+  }
+  return [...bySender].map(([sender, messages]) => `${sender}\n${messages.join("\n")}`);
+}
+
 export function splitApplicants(raw: string) {
-  const blocks = raw
-    .split(/\n\s*\n/)
-    .map((block) => block.trim())
-    .filter((block) => block.length > 0);
+  // Copying from WhatsApp can add invisible direction marks; remove them first.
+  const lines = raw.replace(/[‎‏]/g, "").split(/\r?\n/);
+  const isWhatsAppChat = lines.some((line) => WHATSAPP_LINE.test(line));
+
+  const blocks = isWhatsAppChat
+    ? splitWhatsAppChat(lines)
+    : raw
+        .split(/\n\s*\n/)
+        .map((block) => block.trim())
+        .filter((block) => block.length > 0);
 
   const applicants: Applicant[] = blocks
     .slice(0, MAX_APPLICANTS)
@@ -55,23 +89,26 @@ function fallbackName(text: string) {
   return wordsWithLetters(text.split("\n")[0]).slice(0, 2).join(" ") || "Applicant";
 }
 
-// Each must-have counts the same: met = full marks, unclear = half, missed = 0.
-export function scoreOf(verdicts: Verdict[]) {
+// Must-haves are worth up to 90 points, shared equally: met = full, unclear = half, missed = 0.
+// Each extra strength adds 5 (at most 2), so equally qualified applicants rarely tie.
+export function scoreOf(verdicts: Verdict[], strengths: string[]) {
   if (verdicts.length === 0) return 0;
   const points = verdicts.reduce(
     (sum, v) => sum + (v === "met" ? 1 : v === "unclear" ? 0.5 : 0),
     0,
   );
-  return Math.round((100 * points) / verdicts.length);
+  return Math.round((90 * points) / verdicts.length) + 5 * Math.min(strengths.length, 2);
 }
 
-export function reasonOf(mustHaves: string[], verdicts: Verdict[]) {
+export function reasonOf(mustHaves: string[], verdicts: Verdict[], strengths: string[]) {
   const pick = (want: Verdict) =>
     mustHaves.filter((_, i) => verdicts[i] === want).join(", ");
+  const allMet = verdicts.length > 0 && verdicts.every((v) => v === "met");
   const parts = [
-    pick("met") && `Meets: ${pick("met")}.`,
+    allMet ? `Meets all ${verdicts.length} must-haves.` : pick("met") && `Meets: ${pick("met")}.`,
     pick("missed") && `Missing: ${pick("missed")}.`,
     pick("unclear") && `Not clear: ${pick("unclear")}.`,
+    strengths.length > 0 && `Plus: ${strengths.join(", ")}.`,
   ];
   return parts.filter(Boolean).join(" ");
 }
@@ -124,8 +161,8 @@ export function buildRanking(
     scored.push({
       id: applicant.id,
       name,
-      score: scoreOf(result.verdicts),
-      reason: reasonOf(mustHaves, result.verdicts),
+      score: scoreOf(result.verdicts, result.strengths),
+      reason: reasonOf(mustHaves, result.verdicts, result.strengths),
       verdicts: mustHaves.map((mustHave, i) => ({
         mustHave,
         result: result.verdicts[i],
