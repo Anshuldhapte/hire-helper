@@ -1,56 +1,51 @@
 @import "tailwindcss";
 
 /*
-  Colours
-  - brand (trust blue): main buttons, header, links. Blue reads as the most trustworthy web colour.
-  - go (deep green): "contact this person" actions and ✓. Dark enough for white text (≥4.5:1).
-  - marigold: small warm highlights only (step numbers, the #1 badge), never large areas.
-  - cream: page background, warmer and friendlier than plain white.
-  - stamp red: only the "पक्का" logo stamp and ✗ missed.
-  - amber: ? unclear.
+  Kaam Pakka design tokens
+  - canvas / surface: light grey page, white surfaces. Depth comes from spacing, not boxes.
+  - ink / slate: primary and secondary text (both ≥ 5.6:1 on white and canvas).
+  - crimson: the red of the "पक्का" stamp. Reserved for the main action and selected states.
+  - line: very faint borders.
+  - go: deep green, only for WhatsApp actions and ✓ (white text 5.0:1).
+  - amber: only for ? "not clear" and gentle hints.
 */
 @theme inline {
-  --font-sans: var(--font-baloo), system-ui, sans-serif;
+  --font-sans: var(--font-jakarta), var(--font-devanagari), system-ui, sans-serif;
   --font-display: var(--font-rozha), serif;
 
-  /* The red of the "पक्का" stamp. */
-  --color-stamp: #c62828;
+  --color-canvas: #f8f9fa;
+  --color-ink: #111827;
+  --color-slate: #5b6472;
+  --color-hint: #6b7280;
+  --color-line: rgba(17, 24, 39, 0.08);
+  --color-line-strong: rgba(17, 24, 39, 0.16);
 
-  --color-brand-50: #eef3ff;
-  --color-brand-100: #dbe6ff;
-  --color-brand-200: #bcd0ff;
-  --color-brand-500: #3b6bf0;
-  --color-brand-600: #2450d6;
-  --color-brand-700: #1c3fb0;
-  --color-brand-900: #142b6e;
+  --color-crimson: #c62828;
+  --color-crimson-700: #a51d1d;
+  --color-crimson-50: #fdf1f1;
+  --color-crimson-100: #f9dcdc;
 
   --color-go-50: #ecfdf3;
   --color-go-100: #d1fadf;
   --color-go-600: #15803d;
   --color-go-700: #116a32;
 
-  --color-marigold-100: #fff1d6;
-  --color-marigold-300: #fcd27a;
-  --color-marigold-400: #fbb437;
-  --color-marigold-800: #8a4b05;
-
-  --color-cream: #fff9f0;
-  --color-ink: #0f172a;
-  --color-muted: #475569;
   --color-danger: #b42318;
+
+  --shadow-soft: 0 10px 40px -10px rgba(0, 0, 0, 0.06);
 }
 
 body {
-  background: var(--color-cream);
+  background: var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-sans);
 }
 
-/* Cards rise in gently as each step appears. */
+/* Content appears gently as each step changes. */
 @keyframes rise-in {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -58,35 +53,14 @@ body {
   }
 }
 .rise-in {
-  animation: rise-in 0.35s ease-out both;
-}
-
-/* Grey placeholder blocks that shimmer while the AI is working. */
-@keyframes shimmer {
-  from {
-    background-position: -200px 0;
-  }
-  to {
-    background-position: 200px 0;
-  }
-}
-.skeleton {
-  background: linear-gradient(90deg, #eef1f5 0px, #f8fafc 80px, #eef1f5 160px);
-  background-size: 400px 100%;
-  animation: shimmer 1.2s linear infinite;
-  border-radius: 0.5rem;
-}
-
-/* Soft dotted backdrop behind the chat-style post preview. */
-.chat-wall {
-  background-color: #f3efe7;
-  background-image: radial-gradient(#e4ddd0 1px, transparent 1px);
-  background-size: 14px 14px;
+  animation: rise-in 0.28s ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rise-in,
-  .skeleton {
+  .rise-in {
     animation: none;
+  }
+  html {
+    scroll-behavior: auto;
   }
 }

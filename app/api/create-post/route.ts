@@ -1,5 +1,5 @@
 import { BadAiAnswerError, aiErrorResponse, askForJson, errorResponse, fixLineBreaks } from "@/lib/ai";
-import { quoteIsIn } from "@/lib/quote";
+import { quoteIsIn, wordsAreIn } from "@/lib/quote";
 import { FIXED_QUESTIONS, parseOpenings, suggestedMustHaves } from "@/lib/roles";
 import {
   MAX_DESCRIPTION_CHARS,
@@ -80,7 +80,7 @@ export async function POST(request: Request) {
       description,
       roleTitle: out.roleTitle.trim() || out.copied.role.trim(),
       roleKey: out.roleKey,
-      openings: found(out.copied.openings) ? parseOpenings(out.copied.openings) : 1,
+      openings: wordsAreIn(out.copied.openings, description) ? parseOpenings(out.copied.openings) : 1,
       area: out.copied.area.trim(),
       pay: out.copied.pay.trim(),
       shift,

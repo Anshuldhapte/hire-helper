@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { digitsOf, quoteIsIn } from "./quote";
+import { digitsOf, quoteIsIn, wordsAreIn } from "./quote";
 import { parseOpenings, suggestedMustHaves } from "./roles";
 import { interviewMessage, whatsappLink } from "./whatsapp";
 
@@ -19,6 +19,12 @@ describe("quote check", () => {
   it("treats ₹, Rs and rs the same, and Marathi digits as 0–9", () => {
     expect(quoteIsIn("Rs 12,000", "Need counter staff, ₹12,000, evening shift")).toBe(true);
     expect(quoteIsIn("१ वर्ष", "पेट्रोल पंपावर 1 वर्ष कॅश सांभाळली")).toBe(true);
+  });
+
+  it("matches short answers like '2' only as whole words", () => {
+    expect(wordsAreIn("2", "Need 2 counter staff, ₹12,000")).toBe(true);
+    expect(wordsAreIn("2", "Need counter staff, ₹12,000")).toBe(false);
+    expect(wordsAreIn("two", "Need two counter boys")).toBe(true);
   });
 
   it("reads digits out of an amount", () => {

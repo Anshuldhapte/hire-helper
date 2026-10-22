@@ -73,6 +73,26 @@ So the app makes clear, fee-free posts, checks each applicant against the must-h
 - Checking each top-3 card: the proof words and original reply are shown, so a wrong tick is easy to spot.
 - Pressing Send in WhatsApp; checking ID and legal requirements at interview; deciding whom to hire.
 
+## How the owner creates a job
+
+A 5-step form built for a busy shop owner on a phone, mostly taps:
+
+1. **Work:** large cards (Counter staff, Shop helper, Delivery staff, Packing staff, Sales assistant, Kitchen helper, or *Something else*), plus an optional kind of shop.
+2. **Details:** tap the must-haves that matter (or add your own words), how many people, and optional notes. Skip it and the app suggests the basics.
+3. **Pay & hours:** per month or per day, common amounts to tap or a custom amount (shown as ₹12,000), and optional shift, hours and days.
+4. **Location:** common Pune areas or a typed area, and an optional "place to stay" answer.
+5. **Review:** the job exactly as job seekers will see it, with **Edit** next to each part; then **Create job post**.
+
+Only the work, pay and area are required; every answer is kept when moving back and forth. The taps are turned into one line (shown on the Review step) and sent to the same `/api/create-post`, so all the checks stay the same. **Prefer to type or speak? Describe it in one line** keeps the quick one-line option with examples and the mic.
+
+On desktop, a **live preview** sits beside the form and updates with every tap; missing details show as grey *Add salary*-style hints, never as made-up facts. Once the post is written, the preview shows the real post. On phones, the preview folds into a *Preview job listing* toggle and appears in full on the Review step.
+
+## Design system
+
+- **Colours:** page `#F8F9FA`, text `#111827`, secondary slate `#5B6472`, white surfaces, very faint borders. **Crimson `#C62828`**, the red of the "पक्का" stamp, is used only for the main action, selected options and the progress track. Deep green only for WhatsApp buttons and ✓; amber only for ?. Every text colour pair meets WCAG AA (4.5:1 or more).
+- **Type:** Plus Jakarta Sans for English, with Noto Sans Devanagari picked up automatically for Hindi and Marathi; Rozha One only for the logo. Letter-spaced labels are used for English only, because letter-spacing breaks Devanagari joined letters.
+- **Controls:** choices are real radio buttons and checkboxes styled as cards and pills, so they work with a keyboard and screen readers; all tap targets are at least 44px; motion is minimal and turns off with *reduce motion*.
+
 ## Fairness, privacy and trust
 
 - **Fair matching:** ranking uses only job skills and availability. Caste, religion, native place, gender or community are never used, and appeals like "I am from your village" count for nothing. The screen says so under the top 3.
@@ -136,7 +156,9 @@ So the app makes clear, fee-free posts, checks each applicant against the must-h
 
 ## Project layout
 
-- `app/page.tsx`: the one screen · `app/ui.tsx`: logo, step bar, cards · `app/speech.ts`: Listen and mic
+- `app/page.tsx`: the one screen · `app/JobWizard.tsx`: the 5-step job form · `app/JobPreview.tsx`: the live job listing
+- `app/ui.tsx`: design-system pieces (buttons, option cards and pills, progress track, headings) · `app/speech.ts`: Listen and mic
+- `lib/draft.ts`: the form's options and how taps become the one-line description
 - `app/api/create-post`, `rank`, `samples`, `preview`: the four AI routes
 - `lib/ai.ts`: Gemini calls, `MODELS`, time limits, error messages
 - `lib/schemas.ts`: zod schemas and types · `lib/quote.ts`: the proof check

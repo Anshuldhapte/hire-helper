@@ -22,5 +22,12 @@ export function quoteIsIn(quote: string, text: string) {
   return q.length >= 2 && normalize(text).includes(q);
 }
 
+// For short answers like "2": the same words must appear as whole words, so "2" matches
+// "Need 2 counter staff" but not "₹12,000".
+export function wordsAreIn(words: string, text: string) {
+  const w = normalize(words);
+  return w.length > 0 && ` ${normalize(text)} `.includes(` ${w} `);
+}
+
 // Just the digits of an amount, e.g. "₹12,000" → "12000", "१२,०००" → "12000".
 export const digitsOf = (text: string) => toLatinDigits(text).replace(/[^\d]/g, "");
