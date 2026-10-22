@@ -2,8 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { buildRanking, splitApplicants, type Ranking, type RankedCard } from "@/lib/applicants";
-import { EMPTY_DRAFT, type JobDraft } from "@/lib/draft";
-import { ACCOMMODATION_OPTIONS, FEE_LINE, LEGAL_NOTE, type AccommodationKey } from "@/lib/roles";
+import {
+  ACCOMMODATION_OPTIONS,
+  FEE_LINE,
+  LEGAL_NOTE,
+  type AccommodationKey,
+} from "@/lib/roles";
 import { BUILT_IN_SAMPLES, DEMO_JOB_LINE } from "@/lib/samples";
 import {
   MAX_DESCRIPTION_CHARS,
@@ -15,42 +19,49 @@ import {
   type SamplesResponse,
 } from "@/lib/schemas";
 import { checkInMessage, whatsappLink, whatsappShareLink } from "@/lib/whatsapp";
-import { JobPreview } from "./JobPreview";
-import { JobWizard } from "./JobWizard";
 import { findVoice, getRecognition, speak, useMicSupported, useVoices, type Recognition } from "./speech";
 import {
+  Card,
   ChatIcon,
   CopyIcon,
-  Eyebrow,
   Logo,
   MicIcon,
   Notice,
-  OptionPill,
-  PencilIcon,
   STATUS_STYLE,
   ScoreRing,
   Spinner,
-  StepHeading,
-  Surface,
-  ghostButton,
+  StepTitle,
+  Stepper,
   primaryButton,
   secondaryButton,
-  textInput,
   whatsappButton,
   type Message,
 } from "./ui";
 
 const NETWORK_ERROR = "The AI is busy right now. Please try again.";
 
-// One tap fills in a realistic line (for the "describe it in one line" option).
+// One tap fills in a realistic line. The first one is our demo job.
 const EXAMPLES = [
-  { label: "Wine shop counter", text: DEMO_JOB_LINE },
-  { label: "Petrol pump attendant", text: "Need a petrol pump attendant in Hadapsar, Pune, ₹13,000 a month, day shift, must handle cash and UPI" },
-  { label: "Kirana helper", text: "Need a helper for my kirana store in Karve Nagar, Pune, ₹11,000 a month, 9 am to 9 pm, must lift stock and do home delivery" },
-  { label: "Café helper", text: "Need a kitchen helper for my café in Baner, Pune, ₹12,000 a month, 6 days a week, must know basic cutting and cleaning" },
-  { label: "Delivery staff", text: "Need a delivery rider for my shop in Aundh, Pune, ₹14,000 a month, must have a bike and licence" },
+  { label: "🍷 Wine shop counter", text: DEMO_JOB_LINE },
+  {
+    label: "⛽ Petrol pump attendant",
+    text: "Need a petrol pump attendant in Hadapsar, Pune, ₹13,000 a month, day shift, must handle cash and UPI",
+  },
+  {
+    label: "🛒 Kirana helper",
+    text: "Need a helper for my kirana store in Karve Nagar, Pune, ₹11,000 a month, 9 am to 9 pm, must lift stock and do home delivery",
+  },
+  {
+    label: "🍳 Café helper",
+    text: "Need a kitchen helper for my café in Baner, Pune, ₹12,000 a month, 6 days a week, must know basic cutting and cleaning",
+  },
+  {
+    label: "🛵 Delivery staff",
+    text: "Need a delivery rider for my shop in Aundh, Pune, ₹14,000 a month, must have a bike and licence",
+  },
 ];
 
+// Shown next to each missing detail so the owner knows exactly what to add.
 const MISSING_HINT: Record<RequiredDetail, string> = {
   role: "what they'll do, e.g. “counter staff”",
   pay: "e.g. “₹12,000 a month”",
@@ -115,13 +126,15 @@ function fullPost(job: Job, accommodation: AccommodationKey | null) {
   return [...lines, ...extra, applyLine, FEE_LINE].filter((l) => l !== null).join("\n");
 }
 
-function CopyButton({ text, label, primary }: { text: string; label: string; primary?: boolean }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+type CopyState = "idle" | "copied" | "failed";
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [state, setState] = useState<CopyState>("idle");
   return (
     <div className="flex flex-col gap-2">
       <button
         type="button"
-        className={primary ? primaryButton : secondaryButton}
+        className={secondaryButton}
         onClick={async () => {
           const ok = await copyText(text);
           setState(ok ? "copied" : "failed");
@@ -137,10 +150,7 @@ function CopyButton({ text, label, primary }: { text: string; label: string; pri
 }
 
 export default function Home() {
-  // ---- Creating the job ----
-  const [mode, setMode] = useState<"steps" | "line">("steps");
-  const [draft, setDraft] = useState<JobDraft>(EMPTY_DRAFT);
-  const [step, setStep] = useState(0);
+  // ---- Step 1 ----
   const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [postMessage, setPostMessage] = useState<Message>(null);
@@ -161,7 +171,7 @@ export default function Home() {
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<Recognition | null>(null);
 
-  // ---- Applicants ----
+  // ---- Step 2 ----
   const [replies, setReplies] = useState("");
   const [fromSamples, setFromSamples] = useState(false);
   const [samplesNote, setSamplesNote] = useState<string | null>(null);
@@ -171,7 +181,7 @@ export default function Home() {
   const [loadingSamples, setLoadingSamples] = useState(false);
   const [rankMessage, setRankMessage] = useState<Message>(null);
 
-  // ---- Top 3 ----
+  // ---- Step 3 ----
   const [result, setResult] = useState<Ranking | null>(null);
   const [hiredId, setHiredId] = useState<string | null>(null);
 
@@ -180,6 +190,7 @@ export default function Home() {
 
   const replyCount = useMemo(() => splitApplicants(replies).applicants.length, [replies]);
   const needsConsent = replies.trim() !== "" && !fromSamples;
+  const step = result ? 3 : job ? 2 : 1;
 
   // Bring each new result into view, so the owner doesn't have to hunt for it.
   useEffect(() => {
@@ -197,15 +208,14 @@ export default function Home() {
     setHiredId(null);
   }
 
-  // Both ways of creating a job end here, with one line of text: the same API as before.
-  async function createPost(text: string, stay: AccommodationKey | null) {
+  async function createPost() {
+    const text = description.trim();
     setMissing([]);
-    const line = text.trim();
-    if (!line) {
+    if (!text) {
       setPostMessage({ tone: "yellow", text: "Please describe the job" });
       return;
     }
-    if (line.length > MAX_DESCRIPTION_CHARS) {
+    if (text.length > MAX_DESCRIPTION_CHARS) {
       setPostMessage({ tone: "yellow", text: "Please keep it to one or two lines" });
       return;
     }
@@ -215,9 +225,9 @@ export default function Home() {
     setCreating(true);
     setPostMessage(null);
     setJob(null);
-    setAccommodation(stay);
+    setAccommodation(null);
     clearAfterJobChange();
-    const data = await postJson<CreatePostResponse>("/api/create-post", { description: line }, 16_000);
+    const data = await postJson<CreatePostResponse>("/api/create-post", { description: text }, 16_000);
     setCreating(false);
 
     if (data.status === "error") {
@@ -241,14 +251,6 @@ export default function Home() {
     }
   }
 
-  function editJob() {
-    // Go back to the form with every answer still filled in.
-    setJob(null);
-    clearAfterJobChange();
-    if (mode === "steps") setStep(4);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
   function removeMustHave(id: string) {
     if (!job || job.mustHaves.length <= 1) return; // keep at least one to rank on
     setJob({ ...job, mustHaves: job.mustHaves.filter((m) => m.id !== id) });
@@ -257,19 +259,18 @@ export default function Home() {
 
   function chooseAccommodation(key: AccommodationKey) {
     setAccommodation(key); // plain code: updates the card and post, no AI call
-    setDraft({ ...draft, accommodation: key });
     setPreview(null); // the preview mentions where they'll stay, so make a fresh one
     setPreviewMessage(null);
   }
 
   function toggleMic() {
-    const RecognitionClass = getRecognition();
-    if (!RecognitionClass) return;
+    const Recognition = getRecognition();
+    if (!Recognition) return;
     if (listening) {
       recognitionRef.current?.stop();
       return;
     }
-    const r = new RecognitionClass();
+    const r = new Recognition();
     r.lang = micLang;
     r.interimResults = false;
     r.onresult = (e) => {
@@ -373,6 +374,7 @@ export default function Home() {
     setResult(buildRanking(applicants, checked, job.mustHaves, job.roleTitle, interviewTime));
   }
 
+  const accommodationCard = ACCOMMODATION_OPTIONS.find((o) => o.key === accommodation)?.card;
   const post = job ? fullPost(job, accommodation) : "";
   const copyPostText = job
     ? `${post}\n\nPlease reply with your name, phone number and answers:\n${job.questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
@@ -380,409 +382,366 @@ export default function Home() {
   const previewText = preview ? preview[previewTab] : "";
   const previewVoice = findVoice(voices, previewTab === "marathi" ? "mr" : "hi");
 
-  // What the side preview shows: the real post once it exists, otherwise the live form.
-  const sidePreview = job ? (
-    <article className="rounded-3xl bg-white p-6 shadow-soft ring-1 ring-line" aria-label="Your job post">
-      <Eyebrow>Your post · ready to share</Eyebrow>
-      <p className="post-text mt-4 whitespace-pre-wrap break-words text-base leading-relaxed">{post}</p>
-    </article>
-  ) : mode === "steps" ? (
-    <JobPreview draft={draft} onEdit={step === 4 ? setStep : undefined} />
-  ) : (
-    <div className="rounded-3xl border border-dashed border-line-strong p-6 text-base text-slate">
-      Your job post will appear here once it&apos;s written.
-    </div>
-  );
-
   return (
     <div className="flex flex-1 flex-col">
-      <header className="mx-auto flex w-full max-w-[1200px] items-center justify-between gap-4 px-5 pb-2 pt-6 sm:px-8">
-        <Logo />
-        <span className="rounded-full bg-white px-3 py-1.5 text-center text-xs font-semibold leading-snug text-ink ring-1 ring-line">
-          एक रुपया फीस नहीं · No fee for workers
-        </span>
+      {/* ---- Header ---- */}
+      <header className="border-b border-brand-100 bg-white/70 px-4 pb-5 pt-6">
+        <div className="mx-auto max-w-[480px]">
+          <div className="flex items-start justify-between gap-3">
+            <Logo />
+            <span className="mt-2 rounded-full bg-go-50 px-3 py-1 text-center text-xs font-semibold leading-snug text-go-700 ring-1 ring-go-100">
+              एक रुपया फीस नहीं · No fee for workers
+            </span>
+          </div>
+          <p className="mt-3 text-[18px] font-semibold leading-snug">स्टाफ पक्का, काम पक्का</p>
+          <p className="text-sm text-muted">Trusted staff. Confirmed jobs.</p>
+          <p className="mt-3 text-base font-medium text-brand-700">A shortlist of 3 trusted workers, not 40 random calls.</p>
+          <Stepper current={step} />
+        </div>
       </header>
 
-      <main className="mx-auto grid w-full max-w-[1200px] gap-10 px-5 pb-16 pt-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-14">
-        <div className="min-w-0">
-          {/* ---- Intro ---- */}
-          {/* Letter-spacing breaks Devanagari joined letters, so the Hindi line has none. */}
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <Eyebrow>For shop owners</Eyebrow>
-            <span className="text-sm font-semibold text-slate">स्टाफ पक्का, काम पक्का</span>
+      <main className="mx-auto flex w-full max-w-[480px] flex-col gap-5 px-4 py-5">
+        {/* ================= STEP 1 ================= */}
+        <Card>
+          <StepTitle step={1} title="Describe the job" hint="One line is enough: the role, pay and area." />
+
+          <div className="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1">
+            {EXAMPLES.map((ex) => (
+              <button
+                key={ex.label}
+                type="button"
+                onClick={() => setDescription(ex.text)}
+                className="min-h-11 shrink-0 rounded-full border border-brand-200 bg-brand-50 px-4 text-sm font-semibold text-brand-700 hover:bg-brand-100"
+              >
+                {ex.label}
+              </button>
+            ))}
           </div>
-          <h1 className="mt-3 max-w-2xl text-[32px] font-extrabold leading-[1.1] tracking-tight sm:text-5xl">
-            A shortlist of 3 trusted workers, not 40 random calls.
-          </h1>
-          <p className="mt-4 max-w-xl text-lg leading-relaxed text-slate">
-            Tell us the job in a few taps. We write a clear post, check every reply, and show you the 3 worth calling.
+
+          <label htmlFor="job" className="sr-only">
+            Job description
+          </label>
+          <textarea
+            id="job"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="e.g. Need a delivery rider in Pune, ₹15,000 a month, 6 days a week, must have a bike and licence"
+            className="w-full rounded-2xl border-2 border-brand-100 bg-white p-4 text-base leading-relaxed outline-none transition placeholder:text-slate-400 focus:border-brand-500"
+          />
+          <div className="mb-3 mt-1 flex items-center justify-between gap-3 text-sm text-muted">
+            {micSupported ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleMic}
+                  aria-label={listening ? "Stop voice input" : "Speak the job"}
+                  className={`flex h-11 w-11 items-center justify-center rounded-full ${listening ? "animate-pulse bg-stamp text-white" : "bg-brand-50 text-brand-700 ring-1 ring-brand-200"}`}
+                >
+                  <MicIcon />
+                </button>
+                <select
+                  value={micLang}
+                  onChange={(e) => setMicLang(e.target.value)}
+                  aria-label="Voice language"
+                  className="h-11 rounded-xl border border-brand-200 bg-white px-2 text-sm"
+                >
+                  {MIC_LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <span />
+            )}
+            <span className={`shrink-0 ${description.length > MAX_DESCRIPTION_CHARS ? "font-bold text-danger" : ""}`}>
+              {description.length}/{MAX_DESCRIPTION_CHARS}
+            </span>
+          </div>
+
+          <button onClick={createPost} disabled={creating} className={`${primaryButton} w-full`}>
+            {creating && <Spinner />}
+            {creating ? "Writing your post… (up to 15 seconds)" : "Create post"}
+          </button>
+
+          <div aria-live="polite" className="mt-3 flex flex-col gap-2">
+            <Notice message={postMessage} />
+            {missing.length > 0 && (
+              <ul className="flex flex-col gap-2">
+                {missing.map((m) => (
+                  <li key={m} className="flex items-center gap-2 rounded-xl bg-marigold-100/60 px-3 py-2 text-sm">
+                    <span className="rounded-full bg-marigold-400 px-2 py-0.5 text-xs font-bold capitalize text-ink">{m}</span>
+                    <span className="text-marigold-800">{MISSING_HINT[m]}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </Card>
+
+        {/* ---- Job card, post, questions, preview ---- */}
+        {job && (
+          <div ref={postRef} className="flex scroll-mt-4 flex-col gap-5">
+            <Card>
+              <h2 className="mb-3 text-xl font-bold">Job card</h2>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-base">
+                {[
+                  ["Role", job.roleTitle],
+                  ["Openings", String(job.openings)],
+                  ["Area", job.area],
+                  ["Shift/hours", job.shift || "Not given"],
+                  ["Pay", job.pay],
+                  ["Accommodation", accommodationCard ?? "Not answered yet"],
+                ].map(([k, v]) => (
+                  <div key={k} className="contents">
+                    <dt className="text-muted">{k}</dt>
+                    <dd className="font-semibold">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+
+              <h3 className="mb-2 mt-5 text-base font-bold">Must-haves</h3>
+              <ul className="flex flex-col gap-2">
+                {job.mustHaves.map((m) => (
+                  <li key={m.id} className="flex items-center gap-2 rounded-xl bg-brand-50 px-3 py-2 text-base">
+                    <span className="flex-1">{m.label}</span>
+                    {m.source === "suggested" && (
+                      <>
+                        <span className="rounded-full bg-marigold-100 px-2 py-0.5 text-xs font-bold text-marigold-800">Suggested</span>
+                        {job.mustHaves.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeMustHave(m.id)}
+                            aria-label={`Remove ${m.label}`}
+                            className="flex h-11 w-11 items-center justify-center rounded-full text-lg text-muted hover:bg-white"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-sm text-muted">ℹ️ {LEGAL_NOTE}</p>
+
+              {/* The one follow-up question: plain code, no AI call. */}
+              <h3 className="mb-2 mt-5 text-base font-bold">Is accommodation provided?</h3>
+              <div className="grid grid-cols-2 gap-2">
+                {ACCOMMODATION_OPTIONS.map((o) => (
+                  <button
+                    key={o.key}
+                    type="button"
+                    onClick={() => chooseAccommodation(o.key)}
+                    aria-pressed={accommodation === o.key}
+                    className={`min-h-12 rounded-xl px-3 py-2 text-sm font-semibold ring-1 ${
+                      accommodation === o.key ? "bg-brand-600 text-white ring-brand-600" : "bg-white text-brand-700 ring-brand-200 hover:bg-brand-50"
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </Card>
+
+            <Card>
+              <h2 className="mb-3 text-xl font-bold">Your job post</h2>
+              <div className="chat-wall rounded-2xl p-3">
+                <div className="ml-auto max-w-[94%] rounded-2xl rounded-tr-sm bg-go-50 p-3 shadow-sm ring-1 ring-go-100">
+                  <p className="whitespace-pre-wrap text-base leading-relaxed">{post}</p>
+                </div>
+              </div>
+
+              <h3 className="mb-2 mt-5 text-base font-bold">Screening questions</h3>
+              <ol className="flex flex-col gap-2">
+                {job.questions.map((q, i) => (
+                  <li key={q} className="flex gap-3 rounded-xl bg-slate-50 px-3 py-2 text-base">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-600 text-sm font-bold text-white">
+                      {i + 1}
+                    </span>
+                    <span>{q}</span>
+                  </li>
+                ))}
+              </ol>
+
+              <div className="mt-5">
+                <CopyButton text={copyPostText} label="Copy post" />
+              </div>
+            </Card>
+
+            <Card>
+              <h2 className="text-xl font-bold">For village candidates</h2>
+              <p className="mb-3 mt-1 text-base text-muted">A short job preview in Marathi and Hindi to send to village groups.</p>
+              <button onClick={makePreview} disabled={previewing} className={`${secondaryButton} w-full`}>
+                {previewing && <Spinner />}
+                {previewing ? "Making preview… (up to 15 seconds)" : "Make job preview for village candidates"}
+              </button>
+              <div aria-live="polite" className="mt-3">
+                <Notice message={previewMessage} />
+              </div>
+              {preview && (
+                <div className="rise-in mt-3">
+                  <div role="tablist" className="mb-3 grid grid-cols-2 gap-2">
+                    {(["marathi", "hindi"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        role="tab"
+                        aria-selected={previewTab === tab}
+                        onClick={() => setPreviewTab(tab)}
+                        className={`min-h-11 rounded-xl text-base font-bold ${previewTab === tab ? "bg-brand-600 text-white" : "bg-brand-50 text-brand-700"}`}
+                      >
+                        {tab === "marathi" ? "मराठी" : "हिंदी"}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="whitespace-pre-wrap rounded-2xl bg-slate-50 p-4 text-base leading-relaxed">{previewText}</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {previewVoice ? (
+                      <button type="button" onClick={() => speak(previewText, previewVoice)} className={secondaryButton}>
+                        🔊 Listen
+                      </button>
+                    ) : (
+                      <p className="flex items-center justify-center rounded-xl bg-slate-100 px-3 text-center text-sm text-muted">
+                        Audio not available on this phone
+                      </p>
+                    )}
+                    <a href={whatsappShareLink(previewText)} target="_blank" rel="noopener noreferrer" className={whatsappButton}>
+                      <ChatIcon />
+                      Share on WhatsApp
+                    </a>
+                  </div>
+                  <div className="mt-2">
+                    <CopyButton text={previewText} label="Copy" />
+                  </div>
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* ================= STEP 2 ================= */}
+        <Card className={job ? "" : "opacity-70"}>
+          <StepTitle
+            step={2}
+            title="Add applicants' replies"
+            hint="Paste all replies at once. Put a blank line between people, or paste a copied WhatsApp chat."
+          />
+          {!job && <p className="mb-3 rounded-xl bg-slate-100 px-4 py-3 text-base font-medium text-muted">🔒 Create a job post first.</p>}
+
+          <label htmlFor="replies" className="sr-only">
+            Applicants&apos; replies
+          </label>
+          <textarea
+            id="replies"
+            value={replies}
+            onChange={(e) => {
+              setReplies(e.target.value);
+              setFromSamples(false); // the owner's own replies need their consent tick
+              setSamplesNote(null);
+            }}
+            rows={8}
+            disabled={!job}
+            className="w-full rounded-2xl border-2 border-brand-100 bg-white p-4 text-base leading-relaxed outline-none transition focus:border-brand-500 disabled:bg-slate-50"
+          />
+          <p className="mb-3 mt-1 text-sm text-muted">
+            {replyCount > 0 ? `📋 ${replyCount} ${replyCount === 1 ? "reply" : "replies"} found` : "No replies yet? Load samples to try it."}
+            {samplesNote && <span className="ml-2 font-semibold text-marigold-800">· {samplesNote}</span>}
           </p>
 
-          {/* ================= Create the job ================= */}
-          <Surface className="mt-10">
-            {mode === "steps" ? (
-              <>
-                {!job && (
-                  <details className="mb-8 rounded-2xl bg-canvas lg:hidden">
-                    <summary className="flex min-h-12 cursor-pointer items-center px-4 text-base font-semibold">Preview job listing</summary>
-                    <div className="px-2 pb-3">
-                      <JobPreview draft={draft} />
-                    </div>
-                  </details>
-                )}
-                <JobWizard
-                  draft={draft}
-                  setDraft={setDraft}
-                  step={step}
-                  setStep={setStep}
-                  creating={creating}
-                  onCreate={(line) => createPost(line, draft.accommodation)}
-                />
-              </>
-            ) : (
-              <>
-                <StepHeading eyebrow="Quick start" title="Describe the job in one line" hint="The work, pay and area are enough. Type, tap an example, or speak." />
-                <div className="mb-4 flex flex-wrap gap-2">
-                  {EXAMPLES.map((ex) => (
-                    <button
-                      key={ex.label}
-                      type="button"
-                      onClick={() => setDescription(ex.text)}
-                      className="min-h-11 rounded-full bg-white px-4 text-sm font-semibold ring-1 ring-line-strong hover:ring-ink/30 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-crimson-100"
-                    >
-                      {ex.label}
-                    </button>
-                  ))}
-                </div>
-                <label htmlFor="job" className="sr-only">
-                  Job description
-                </label>
-                <textarea
-                  id="job"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  rows={3}
-                  placeholder="e.g. Need a delivery rider in Pune, ₹15,000 a month, 6 days a week, must have a bike and licence"
-                  className={`${textInput} min-h-28 text-lg leading-relaxed`}
-                />
-                <div className="mb-6 mt-2 flex items-center justify-between gap-3 text-sm text-slate">
-                  {micSupported ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={toggleMic}
-                        aria-label={listening ? "Stop voice input" : "Speak the job"}
-                        className={`flex h-11 w-11 items-center justify-center rounded-full ${listening ? "animate-pulse bg-crimson text-white" : "bg-white text-ink ring-1 ring-line-strong"}`}
-                      >
-                        <MicIcon />
-                      </button>
-                      <select
-                        value={micLang}
-                        onChange={(e) => setMicLang(e.target.value)}
-                        aria-label="Voice language"
-                        className="h-11 rounded-xl bg-white px-2 text-sm ring-1 ring-line-strong"
-                      >
-                        {MIC_LANGUAGES.map((l) => (
-                          <option key={l.code} value={l.code}>
-                            {l.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : (
-                    <span />
-                  )}
-                  <span className={`shrink-0 ${description.length > MAX_DESCRIPTION_CHARS ? "font-bold text-danger" : ""}`}>
-                    {description.length}/{MAX_DESCRIPTION_CHARS}
-                  </span>
-                </div>
-                <button onClick={() => createPost(description, null)} disabled={creating} className={`${primaryButton} min-w-48`}>
-                  {creating && <Spinner />}
-                  {creating ? "Writing your post… (up to 15 seconds)" : "Create post"}
-                </button>
-              </>
-            )}
+          <button onClick={loadSamples} disabled={!job || loadingSamples || ranking} className={`${secondaryButton} w-full`}>
+            {loadingSamples && <Spinner />}
+            {loadingSamples ? "Loading samples…" : "Load sample applicants"}
+          </button>
 
-            <div aria-live="polite" className="mt-4 flex flex-col gap-2">
-              <Notice message={postMessage} />
-              {missing.length > 0 && (
-                <ul className="flex flex-col gap-2">
-                  {missing.map((m) => (
-                    <li key={m} className="flex items-center gap-3 text-base">
-                      <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-sm font-bold capitalize text-amber-900 ring-1 ring-amber-200">{m}</span>
-                      <span className="text-slate">{MISSING_HINT[m]}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+          <label htmlFor="when" className="mb-1 mt-4 block text-base font-semibold">
+            Interview time (optional)
+          </label>
+          <input
+            id="when"
+            value={interviewTime}
+            onChange={(e) => setInterviewTime(e.target.value)}
+            disabled={!job}
+            placeholder="e.g. tomorrow at 11 am"
+            className="h-12 w-full rounded-xl border-2 border-brand-100 bg-white px-4 text-base outline-none focus:border-brand-500 disabled:bg-slate-50"
+          />
 
-            <div className="mt-8 border-t border-line pt-5">
-              <button
-                type="button"
-                onClick={() => {
-                  setMode(mode === "steps" ? "line" : "steps");
-                  setPostMessage(null);
-                  setMissing([]);
-                }}
-                className="text-base font-semibold text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
-              >
-                {mode === "steps" ? "Prefer to type or speak? Describe it in one line" : "Use the step-by-step form instead"}
-              </button>
-            </div>
-          </Surface>
-
-          {/* ================= The finished post ================= */}
-          {job && (
-            <div ref={postRef} className="mt-10 flex scroll-mt-6 flex-col gap-10">
-              <Surface>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <StepHeading eyebrow="Ready to share" title="Your job post" />
-                  <button type="button" onClick={editJob} className={ghostButton}>
-                    <PencilIcon />
-                    Edit job
-                  </button>
-                </div>
-
-                <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
-                  {[
-                    ["Role", job.roleTitle],
-                    ["Openings", String(job.openings)],
-                    ["Area", job.area],
-                    ["Shift/hours", job.shift || "Not given"],
-                    ["Pay", job.pay],
-                    ["Accommodation", ACCOMMODATION_OPTIONS.find((o) => o.key === accommodation)?.card ?? "Not answered yet"],
-                  ].map(([k, v]) => (
-                    <div key={k} className="min-w-0">
-                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-slate">{k}</dt>
-                      <dd className="mt-1 break-words text-base font-semibold">{v}</dd>
-                    </div>
-                  ))}
-                </dl>
-
-                <h3 className="mb-3 mt-8 text-base font-bold">Must-haves</h3>
-                <ul className="divide-y divide-line">
-                  {job.mustHaves.map((m) => (
-                    <li key={m.id} className="flex min-h-12 items-center gap-3 py-1 text-base">
-                      <span className="flex-1 break-words">{m.label}</span>
-                      {m.source === "suggested" && (
-                        <>
-                          <span className="rounded-full bg-canvas px-2.5 py-0.5 text-xs font-semibold text-slate ring-1 ring-line">Suggested</span>
-                          {job.mustHaves.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeMustHave(m.id)}
-                              aria-label={`Remove ${m.label}`}
-                              className="flex h-11 w-11 items-center justify-center rounded-full text-slate hover:bg-canvas hover:text-ink"
-                            >
-                              ✕
-                            </button>
-                          )}
-                        </>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-sm text-slate">{LEGAL_NOTE}</p>
-
-                {/* The one follow-up question: plain code, no AI call. */}
-                <fieldset className="mt-8">
-                  <legend className="mb-3 text-base font-bold">Is accommodation provided?</legend>
-                  <div className="flex flex-wrap gap-2">
-                    {ACCOMMODATION_OPTIONS.map((o) => (
-                      <OptionPill key={o.key} name="accommodation" value={o.key} checked={accommodation === o.key} onChange={() => chooseAccommodation(o.key)}>
-                        {o.label}
-                      </OptionPill>
-                    ))}
-                  </div>
-                </fieldset>
-
-                <h3 className="mb-3 mt-8 text-base font-bold">The post</h3>
-                <p className="post-text whitespace-pre-wrap break-words rounded-2xl bg-canvas p-5 text-base leading-relaxed">{post}</p>
-
-                <h3 className="mb-3 mt-8 text-base font-bold">Screening questions</h3>
-                <ol className="flex flex-col gap-3">
-                  {job.questions.map((q, i) => (
-                    <li key={q} className="flex gap-3 text-base">
-                      <span className="w-6 shrink-0 font-bold text-slate">{i + 1}.</span>
-                      <span>{q}</span>
-                    </li>
-                  ))}
-                </ol>
-
-                <div className="mt-8 flex flex-wrap gap-3">
-                  <CopyButton text={copyPostText} label="Copy post" primary />
-                </div>
-              </Surface>
-
-              <Surface>
-                <StepHeading eyebrow="Reach more people" title="For village candidates" hint="A short job preview in Marathi and Hindi to send to village groups." />
-                <button onClick={makePreview} disabled={previewing} className={secondaryButton}>
-                  {previewing && <Spinner />}
-                  {previewing ? "Making preview… (up to 15 seconds)" : "Make job preview for village candidates"}
-                </button>
-                <div aria-live="polite" className="mt-3">
-                  <Notice message={previewMessage} />
-                </div>
-                {preview && (
-                  <div className="rise-in mt-6 max-w-2xl">
-                    <div role="tablist" className="mb-4 inline-flex rounded-full bg-canvas p-1 ring-1 ring-line">
-                      {(["marathi", "hindi"] as const).map((tab) => (
-                        <button
-                          key={tab}
-                          role="tab"
-                          aria-selected={previewTab === tab}
-                          onClick={() => setPreviewTab(tab)}
-                          className={`min-h-11 rounded-full px-6 text-base font-bold ${previewTab === tab ? "bg-ink text-white" : "text-slate"}`}
-                        >
-                          {tab === "marathi" ? "मराठी" : "हिंदी"}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="whitespace-pre-wrap break-words rounded-2xl bg-canvas p-5 text-base leading-relaxed">{previewText}</p>
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      {previewVoice ? (
-                        <button type="button" onClick={() => speak(previewText, previewVoice)} className={secondaryButton}>
-                          Listen
-                        </button>
-                      ) : (
-                        <p className="flex min-h-12 items-center text-sm text-slate">Audio not available on this phone</p>
-                      )}
-                      <a href={whatsappShareLink(previewText)} target="_blank" rel="noopener noreferrer" className={whatsappButton}>
-                        <ChatIcon />
-                        Share on WhatsApp
-                      </a>
-                      <CopyButton text={previewText} label="Copy" />
-                    </div>
-                  </div>
-                )}
-              </Surface>
-            </div>
+          {/* Privacy (India's DPDP Act): say where replies go, and get consent for real ones. */}
+          <p className="mt-4 rounded-xl bg-brand-50 px-3 py-2 text-sm text-brand-900">
+            🔐 Replies are sent to Google&apos;s Gemini AI to be ranked and are not saved by Kaam Pakka.
+          </p>
+          {needsConsent && (
+            <label className="mt-3 flex min-h-11 items-start gap-3 text-base">
+              <input
+                type="checkbox"
+                checked={consent}
+                onChange={(e) => setConsent(e.target.checked)}
+                className="mt-1 h-5 w-5 shrink-0 accent-brand-600"
+              />
+              <span>These applicants agreed to share their replies with me for this job.</span>
+            </label>
           )}
 
-          {/* ================= Applicants ================= */}
-          <Surface className={`mt-10 ${job ? "" : "opacity-60"}`}>
-            <StepHeading
-              eyebrow="Applicants"
-              title="Add applicants' replies"
-              hint="Paste all replies at once. Put a blank line between people, or paste a copied WhatsApp chat."
-            />
-            {!job && <p className="mb-4 text-base font-medium text-slate">Create a job post first.</p>}
-
-            <label htmlFor="replies" className="sr-only">
-              Applicants&apos; replies
-            </label>
-            <textarea
-              id="replies"
-              value={replies}
-              onChange={(e) => {
-                setReplies(e.target.value);
-                setFromSamples(false); // the owner's own replies need their consent tick
-                setSamplesNote(null);
-              }}
-              rows={8}
-              disabled={!job}
-              className={`${textInput} leading-relaxed`}
-            />
-            <p className="mb-5 mt-2 text-sm text-slate">
-              {replyCount > 0 ? `${replyCount} ${replyCount === 1 ? "reply" : "replies"} found` : "No replies yet? Load samples to try it."}
-              {samplesNote && <span className="ml-2 font-semibold text-ink">· {samplesNote}</span>}
-            </p>
-
-            <button onClick={loadSamples} disabled={!job || loadingSamples || ranking} className={secondaryButton}>
-              {loadingSamples && <Spinner />}
-              {loadingSamples ? "Loading samples…" : "Load sample applicants"}
-            </button>
-
-            <label htmlFor="when" className="mb-2 mt-8 block text-base font-bold">
-              Interview time<span className="ml-2 text-sm font-medium text-slate">Optional</span>
-            </label>
-            <input
-              id="when"
-              value={interviewTime}
-              onChange={(e) => setInterviewTime(e.target.value)}
-              disabled={!job}
-              placeholder="e.g. tomorrow at 11 am"
-              className={`${textInput} max-w-md`}
-            />
-
-            {/* Privacy (India's DPDP Act): say where replies go, and get consent for real ones. */}
-            <p className="mt-8 text-sm leading-relaxed text-slate">
-              Replies are sent to Google&apos;s Gemini AI to be ranked and are not saved by Kaam Pakka.
-            </p>
-            {needsConsent && (
-              <label className="mt-4 flex min-h-11 cursor-pointer items-start gap-3 text-base">
-                <input
-                  type="checkbox"
-                  checked={consent}
-                  onChange={(e) => setConsent(e.target.checked)}
-                  className="mt-1 h-5 w-5 shrink-0 accent-crimson"
-                />
-                <span>These applicants agreed to share their replies with me for this job.</span>
-              </label>
-            )}
-
-            <button
-              onClick={rank}
-              disabled={!job || ranking || loadingSamples || (needsConsent && !consent)}
-              className={`${primaryButton} mt-6 min-w-48`}
-            >
-              {ranking && <Spinner />}
-              {ranking ? "Checking each applicant… (up to 20 seconds)" : "Rank applicants"}
-            </button>
-            <div aria-live="polite" className="mt-4">
-              <Notice message={rankMessage} />
-            </div>
-          </Surface>
-
-          {/* ================= Top 3 ================= */}
-          {result && (
-            <div ref={resultRef} aria-live="polite" className="mt-10 flex scroll-mt-6 flex-col gap-5">
-              <StepHeading eyebrow="Shortlist" title="Your top 3" />
-              {result.notes.map((n) => (
-                <Notice key={n} message={{ tone: "yellow", text: n }} />
-              ))}
-              {result.top.map((card, i) => (
-                <ResultCard
-                  key={card.id}
-                  card={card}
-                  rank={i + 1}
-                  hired={hiredId === card.id}
-                  onHired={() => setHiredId(hiredId === card.id ? null : card.id)}
-                />
-              ))}
-              {result.top.length > 0 && (
-                <p className="text-sm text-slate">Ranked only on job skills and availability — never on caste, religion or native place.</p>
-              )}
-              {[...result.notEnoughInfo, ...result.unchecked].length > 0 && (
-                <details className="rounded-3xl bg-white p-5 ring-1 ring-line sm:p-6">
-                  <summary className="cursor-pointer text-base font-bold text-slate">
-                    Not enough info ({result.notEnoughInfo.length + result.unchecked.length})
-                  </summary>
-                  <ul className="mt-3 divide-y divide-line text-sm">
-                    {[...result.notEnoughInfo, ...result.unchecked].map((n) => (
-                      <li key={n.id} className="py-3">
-                        <span className="block break-words text-ink">{n.preview}</span>
-                        <span className="text-slate">Why: {n.why}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* ---- Live preview (desktop) ---- */}
-        <aside className="hidden lg:block" aria-label="Live preview">
-          <div className="sticky top-8">
-            <Eyebrow>Live preview</Eyebrow>
-            <div className="mt-4">{sidePreview}</div>
+          <button
+            onClick={rank}
+            disabled={!job || ranking || loadingSamples || (needsConsent && !consent)}
+            className={`${primaryButton} mt-4 w-full`}
+          >
+            {ranking && <Spinner />}
+            {ranking ? "Checking each applicant… (up to 20 seconds)" : "Rank applicants"}
+          </button>
+          <div aria-live="polite" className="mt-3">
+            <Notice message={rankMessage} />
           </div>
-        </aside>
+        </Card>
+
+        {/* ================= STEP 3 ================= */}
+        {result && (
+          <div ref={resultRef} aria-live="polite" className="flex scroll-mt-4 flex-col gap-4">
+            <div className="flex items-start gap-3 px-1">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-marigold-400 text-base font-bold text-ink">3</span>
+              <h2 className="text-xl font-bold leading-tight">Your top 3</h2>
+            </div>
+
+            {result.notes.map((n) => (
+              <Notice key={n} message={{ tone: "yellow", text: n }} />
+            ))}
+
+            {result.top.map((card, i) => (
+              <ResultCard
+                key={card.id}
+                card={card}
+                rank={i + 1}
+                hired={hiredId === card.id}
+                onHired={() => setHiredId(hiredId === card.id ? null : card.id)}
+              />
+            ))}
+
+            {result.top.length > 0 && (
+              <p className="px-1 text-sm text-muted">⚖️ Ranked only on job skills and availability — never on caste, religion or native place.</p>
+            )}
+
+            {[...result.notEnoughInfo, ...result.unchecked].length > 0 && (
+              <details className="rounded-3xl bg-white/70 p-5 ring-1 ring-slate-200">
+                <summary className="cursor-pointer text-base font-bold text-muted">
+                  Not enough info ({result.notEnoughInfo.length + result.unchecked.length})
+                </summary>
+                <ul className="mt-3 flex flex-col gap-2 text-sm">
+                  {[...result.notEnoughInfo, ...result.unchecked].map((n) => (
+                    <li key={n.id} className="rounded-xl bg-slate-50 px-3 py-2">
+                      <span className="block text-ink">{n.preview}</span>
+                      <span className="text-muted">Why: {n.why}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
       </main>
 
-      <footer className="mt-auto border-t border-line bg-white px-5 py-5 text-center text-sm font-medium text-slate">
+      <footer className="mt-auto bg-brand-900 px-4 py-4 text-center text-sm font-medium text-white">
         Pay only when a worker joins · Free replacement within 30 days · Workers never pay a fee
       </footer>
     </div>
@@ -790,84 +749,88 @@ export default function Home() {
 }
 
 function ResultCard({ card, rank, hired, onHired }: { card: RankedCard; rank: number; hired: boolean; onHired: () => void }) {
-  const name = card.name.startsWith("Applicant ") ? "" : card.name;
   return (
     <article
-      className={`rise-in rounded-3xl bg-white p-5 shadow-soft ring-1 sm:p-7 ${rank === 1 ? "ring-2 ring-ink" : "ring-line"}`}
-      style={{ animationDelay: `${(rank - 1) * 60}ms` }}
+      className={`rise-in rounded-3xl bg-white p-5 shadow-[0_8px_30px_rgba(20,43,110,0.08)] ring-1 ${rank === 1 ? "ring-2 ring-marigold-400" : "ring-brand-100"}`}
+      style={{ animationDelay: `${(rank - 1) * 80}ms` }}
     >
-      <div className="flex items-center gap-4">
-        <span className="text-3xl font-extrabold tabular-nums text-slate">{rank}</span>
-        <div className="min-w-0 flex-1">
-          <h3 className="break-words text-xl font-extrabold leading-tight">{card.name}</h3>
-          {rank === 1 && <p className="mt-0.5 text-xs font-semibold uppercase tracking-[0.14em] text-crimson">Best match</p>}
-        </div>
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 text-lg font-bold text-white">
+          {rank}
+        </span>
+        <h3 className="min-w-0 flex-1 truncate text-lg font-bold">{card.name}</h3>
         <ScoreRing score={card.score} />
       </div>
 
-      <p className="mt-4 text-base leading-relaxed">{card.reason}</p>
+      <p className="mt-3 text-base leading-relaxed">{card.reason}</p>
 
-      <ul className="mt-4 flex flex-col gap-3">
+      <ul className="mt-3 flex flex-col gap-2">
         {card.checks.map((c) => (
           <li key={c.label} className="flex gap-3 text-base">
             <span
-              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-bold ${STATUS_STYLE[c.status].chip}`}
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full font-bold ${STATUS_STYLE[c.status].chip}`}
               title={STATUS_STYLE[c.status].label}
             >
               {STATUS_STYLE[c.status].icon}
             </span>
             <span className="min-w-0">
               <span className="font-medium">{c.label}</span>
-              <span className="block break-words text-sm italic text-slate">{c.proof ? `“${c.proof}”` : "No proof found"}</span>
+              <span className="block text-sm italic text-muted">{c.proof ? `“${c.proof}”` : "No proof found"}</span>
             </span>
           </li>
         ))}
       </ul>
 
       {card.strengths.length > 0 && (
-        <ul className="mt-4 flex flex-col gap-1">
+        <ul className="mt-3 flex flex-col gap-1">
           {card.strengths.map((s) => (
-            <li key={s.text} className="break-words text-sm">
-              <span className="font-semibold">+ {s.text}</span> <span className="italic text-slate">“{s.proof}”</span>
+            <li key={s.text} className="text-sm">
+              <span className="font-semibold text-go-700">+ {s.text}</span>{" "}
+              <span className="italic text-muted">“{s.proof}”</span>
             </li>
           ))}
         </ul>
       )}
 
       {(card.canJoin || card.stay) && (
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           {card.canJoin && (
-            <span className="rounded-full bg-canvas px-3 py-1 text-sm ring-1 ring-line" title={`“${card.canJoin.proof}”`}>
-              Can join: {card.canJoin.text}
+            <span className="rounded-full bg-brand-50 px-3 py-1 text-sm text-brand-900 ring-1 ring-brand-100" title={`“${card.canJoin.proof}”`}>
+              📅 Can join: {card.canJoin.text}
             </span>
           )}
           {card.stay && (
-            <span className="rounded-full bg-canvas px-3 py-1 text-sm ring-1 ring-line" title={`“${card.stay.proof}”`}>
-              Stay: {card.stay.text}
+            <span className="rounded-full bg-brand-50 px-3 py-1 text-sm text-brand-900 ring-1 ring-brand-100" title={`“${card.stay.proof}”`}>
+              🏠 Stay: {card.stay.text}
             </span>
           )}
         </div>
       )}
 
-      <details className="mt-4 text-base">
-        <summary className="cursor-pointer font-semibold text-ink underline decoration-line-strong underline-offset-4">Show original reply</summary>
-        <p className="mt-2 whitespace-pre-wrap break-words text-slate">{card.text}</p>
+      <details className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-base">
+        <summary className="cursor-pointer font-medium text-brand-700">Show original reply</summary>
+        <p className="mt-2 whitespace-pre-wrap text-muted">{card.text}</p>
       </details>
 
       {card.whatsapp ? (
-        <div className="mt-6 flex flex-wrap gap-3">
-          <a href={card.whatsapp} target="_blank" rel="noopener noreferrer" className={whatsappButton}>
+        <div className="mt-4 flex flex-col gap-2">
+          <a href={card.whatsapp} target="_blank" rel="noopener noreferrer" className={`${whatsappButton} w-full`}>
             <ChatIcon />
             Send WhatsApp reminder
           </a>
-          <button type="button" onClick={onHired} className={secondaryButton}>
+          <button type="button" onClick={onHired} className={`${secondaryButton} w-full`}>
             {hired ? "Hide check-in message" : "Mark as hired"}
           </button>
           {hired && card.phone && (
-            <div className="rise-in w-full rounded-2xl bg-canvas p-4 text-sm">
+            <div className="rise-in rounded-xl bg-go-50 p-3 text-sm ring-1 ring-go-100">
               <p className="font-semibold">Day-7 check-in message (send it after their first week):</p>
-              <p className="mt-1 italic">{checkInMessage(name)}</p>
-              <a href={whatsappLink(card.phone, checkInMessage(name))} target="_blank" rel="noopener noreferrer" className={`${whatsappButton} mt-3`}>
+              <p className="mt-1 italic">{checkInMessage(card.name.startsWith("Applicant ") ? "" : card.name)}</p>
+              <a
+                href={whatsappLink(card.phone, checkInMessage(card.name.startsWith("Applicant ") ? "" : card.name))}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${whatsappButton} mt-2 w-full`}
+              >
                 <ChatIcon />
                 Send check-in on WhatsApp
               </a>
@@ -875,7 +838,7 @@ function ResultCard({ card, rank, hired, onHired }: { card: RankedCard; rank: nu
           )}
         </div>
       ) : (
-        <p className="mt-6 text-base text-hint">No phone number found</p>
+        <p className="mt-4 text-center text-base text-slate-400">No phone number found</p>
       )}
     </article>
   );
