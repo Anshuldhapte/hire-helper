@@ -85,7 +85,7 @@ So the app makes clear, fee-free posts, checks each applicant against the must-h
 | Tool | Why |
 |---|---|
 | **Next.js (App Router) + TypeScript** | One project for the phone screen and the small server routes, so the API key stays on the server. Deploys to Vercel in one click |
-| **Google Gemini API** (`@google/genai`, JSON mode) | Free API key for a hackathon; JSON mode returns answers in a fixed shape. `MODELS` in `lib/ai.ts` holds two stable Flash-Lite models from Google's official list (`gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`), asked at the same time |
+| **Google Gemini API** (`@google/genai`, JSON mode) | Free API key for a hackathon; JSON mode returns answers in a fixed shape. `MODELS` in `lib/ai.ts` holds two stable Flash-Lite models from Google's official list (`gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`), asked at the same time, plus `gemini-3.6-flash` as a backup used only when they're benched, failing, or slower than 8 seconds (its free plan allows just 20 requests a day). A model that answers "busy" is asked once more before being benched |
 | **zod** | Checks every AI answer has exactly the right fields before the screen uses it |
 | **WhatsApp click-to-chat** (`wa.me`) | Opens WhatsApp with the message typed; no Business account or cost; the owner presses Send |
 | **Browser speech** (speechSynthesis, SpeechRecognition) | Listen to previews and speak the job, free and on the phone; hidden where unsupported |
@@ -105,7 +105,7 @@ So the app makes clear, fee-free posts, checks each applicant against the must-h
 | Fewer than 3 qualify | "Only 2 applicants had enough information to rank." |
 | No phone number | Grey "No phone number found"; no WhatsApp button |
 | Preview has the wrong pay or area | "Preview didn't match the job. Please try again." |
-| A model errors or is rate-limited | The other model's answer is used; the failing model is skipped for 60 seconds |
+| A model errors or is rate-limited | A "busy" model is asked once more; the other model's answer is used; a failing model is skipped for 60 seconds; the backup model steps in if both are failing or slow |
 | Both models fail or time out (15 s / 20 s) | "The AI is busy right now. Please try again." Typed text is kept, old results are cleared |
 | Free-plan limit hit | "Too many requests on the free AI plan. Wait a minute and try again." |
 | Key missing or wrong | "The app isn't set up yet (API key missing or wrong)." |

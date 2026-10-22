@@ -208,8 +208,9 @@ export default function Home() {
     setHiredId(null);
   }
 
-  async function createPost() {
-    const text = description.trim();
+  // `spoken` is passed by voice input, which creates the post as soon as the owner stops talking.
+  async function createPost(spoken?: string) {
+    const text = (spoken ?? description).trim();
     setMissing([]);
     if (!text) {
       setPostMessage({ tone: "yellow", text: "Please describe the job" });
@@ -272,14 +273,23 @@ export default function Home() {
     }
     const r = new Recognition();
     r.lang = micLang;
-    r.interimResults = false;
+    // Show words in the box while the owner is still speaking, instead of only at the end.
+    r.interimResults = true;
+    const before = description.trim();
+    let line = before;
     r.onresult = (e) => {
       const said = Array.from(e.results)
         .map((res) => res[0].transcript)
-        .join(" ");
-      setDescription((d) => (d.trim() ? `${d.trim()} ${said}` : said));
+        .join(" ")
+        .trim();
+      line = before ? `${before} ${said}` : said;
+      setDescription(line);
     };
-    r.onend = () => setListening(false);
+    // When they stop talking, write the post straight away: no extra tap needed.
+    r.onend = () => {
+      setListening(false);
+      if (line.trim() && line.trim() !== before) createPost(line);
+    };
     r.onerror = () => setListening(false);
     recognitionRef.current = r;
     setListening(true);
@@ -452,6 +462,11 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
+                {listening && (
+                  <span aria-live="polite" className="text-sm font-semibold text-stamp">
+                    Listening… stop talking to create the post
+                  </span>
+                )}
               </div>
             ) : (
               <span />
@@ -461,7 +476,7 @@ export default function Home() {
             </span>
           </div>
 
-          <button onClick={createPost} disabled={creating} className={`${primaryButton} w-full`}>
+          <button onClick={() => createPost()} disabled={creating || listening} className={`${primaryButton} w-full`}>
             {creating && <Spinner />}
             {creating ? "Writing your post… (up to 15 seconds)" : "Create post"}
           </button>

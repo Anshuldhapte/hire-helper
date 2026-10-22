@@ -4,15 +4,21 @@ import { ApiError, GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import type { ErrorResponse } from "./schemas";
 
-// Two current, stable Flash-Lite models from Google's official model list
-// (https://ai.google.dev/gemini-api/docs/models). Each has its own free-plan quota.
-export const MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+// Stable models from Google's official model list (https://ai.google.dev/gemini-api/docs/models),
+// each with its own free-plan quota. The first two are asked at the same time. The third is a
+// backup, only used when one of them is benched or both fail: its free plan allows just
+// 20 requests a day, so it's kept for when the Flash-Lite models are overloaded.
+export const MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash"];
+const ASK_AT_ONCE = 2;
+const BACKUP_AFTER_MS = 8000;
 
-// A model that errors (including "too many requests") is skipped for 60 seconds.
+// A model that errors (including "too many requests") is skipped for 60 seconds. A "busy"
+// reply is first retried once (see below), so a one-off spike doesn't bench a model.
 const SKIP_MS = 60_000;
 const skipUntil = new Map<string, number>();
 
 class MissingKeyError extends Error {}
+class BackupNotNeeded extends Error {}
 // The AI answered, but the answer had the wrong shape or failed a code check.
 export class BadAiAnswerError extends Error {}
 
@@ -40,19 +46,38 @@ export async function askForJson<T extends z.ZodType>(options: {
   const stop = new AbortController();
   const timer = setTimeout(() => stop.abort(), options.timeoutMs);
 
+  const started = Date.now();
+  const generate = (model: string) =>
+    new GoogleGenAI({ apiKey }).models.generateContent({
+      model,
+      contents: options.prompt,
+      config: {
+        systemInstruction: options.system,
+        responseMimeType: "application/json",
+        responseJsonSchema: jsonSchema,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }, // short thinking = fast answers
+        abortSignal: stop.signal,
+      },
+    });
+
+  // Google's free models often answer "high demand" (5xx) for a moment. That reply comes
+  // back instantly, so wait a little and ask the same model once more while there's time.
+  const generateWithRetry = async (model: string) => {
+    try {
+      return await generate(model);
+    } catch (err) {
+      const busy = err instanceof ApiError && err.status >= 500;
+      const timeLeft = options.timeoutMs - (Date.now() - started);
+      if (!busy || timeLeft < 4000 || stop.signal.aborted) throw err;
+      console.warn(`${model} busy (${err.status}), asking again`);
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return await generate(model);
+    }
+  };
+
   const ask = async (model: string): Promise<z.infer<T>> => {
     try {
-      const response = await new GoogleGenAI({ apiKey }).models.generateContent({
-        model,
-        contents: options.prompt,
-        config: {
-          systemInstruction: options.system,
-          responseMimeType: "application/json",
-          responseJsonSchema: jsonSchema,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }, // short thinking = fast answers
-          abortSignal: stop.signal,
-        },
-      });
+      const response = await generateWithRetry(model);
       let data: unknown;
       try {
         data = JSON.parse(response.text ?? "");
@@ -74,10 +99,35 @@ export async function askForJson<T extends z.ZodType>(options: {
 
   const now = Date.now();
   const ready = MODELS.filter((m) => (skipUntil.get(m) ?? 0) <= now);
+  const pool = ready.length > 0 ? ready : MODELS;
+  const backup = pool[ASK_AT_ONCE];
+  const mainRun = Promise.any(pool.slice(0, ASK_AT_ONCE).map(ask));
+
+  // The backup starts if both main models fail, or if neither has answered after 8 seconds.
+  const backupRun = new Promise<z.infer<T>>((resolve, reject) => {
+    if (!backup) return reject(new BackupNotNeeded());
+    let backupStarted = false;
+    const go = () => {
+      clearTimeout(backupTimer);
+      if (backupStarted) return;
+      backupStarted = true;
+      if (stop.signal.aborted) return reject(new BackupNotNeeded());
+      console.warn(`Main models slow or failing, also asking backup ${backup}`);
+      ask(backup).then(resolve, reject);
+    };
+    const backupTimer = setTimeout(go, BACKUP_AFTER_MS);
+    mainRun.then(() => {
+      clearTimeout(backupTimer);
+      reject(new BackupNotNeeded());
+    }, go);
+  });
+
   try {
-    return await Promise.any((ready.length > 0 ? ready : MODELS).map(ask));
+    return await Promise.any([mainRun, backupRun]);
   } catch (err) {
-    const errors: unknown[] = err instanceof AggregateError ? err.errors : [err];
+    // Flatten the nested failures and drop the "backup wasn't needed" placeholder.
+    const flatten = (e: unknown): unknown[] => (e instanceof AggregateError ? e.errors.flatMap(flatten) : [e]);
+    const errors = flatten(err).filter((e) => !(e instanceof BackupNotNeeded));
     console.warn("All models failed:", errors.map((e) => (e instanceof Error ? e.message.slice(0, 200) : e)));
     // Report the most useful reason: wrong key, then rate limit, then a failed check.
     throw (
