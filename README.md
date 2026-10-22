@@ -16,7 +16,9 @@ Blank or meaningless replies are marked **Not enough info** and never reach the 
 | Empty-box check, splitting replies, junk filter, phone numbers | Plain code |
 | Score (must-haves up to 90, +5 per strength), reason, top 3, WhatsApp links | Plain code |
 
-The AI only judges text. Plain code does all the counting and ranking, so the same judgements always give the same result. Each AI step finishes within its time limit: every question goes to two Gemini models at once, the first good answer is used, and the slower request is cancelled.
+The AI only judges text. Plain code does all the counting and ranking, so the same judgements always give the same result. Each AI step finishes within its time limit: every question goes to the two best Gemini models that are working right now, the first good answer is used, and the slower request is cancelled. A model that runs out of free daily quota or keeps failing is skipped until it recovers.
+
+Every ✓ must come with the applicant's own words as proof, and plain code checks those words really appear in the reply; if they don't, the ✓ becomes "? Not clear". The proof is shown on each card.
 
 ## Run it locally
 

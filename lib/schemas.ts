@@ -13,10 +13,15 @@ export type Verdict = (typeof VERDICTS)[number];
 
 // ---- What we ask the AI to return (JSON mode) ----
 
-// AI call 1: one flat shape for both outcomes. Fields that don't apply come back empty.
+// AI call 1: `found` holds the owner's exact words for each required detail ("" if not
+// written); code checks them. The post fields come back empty when something is missing.
 export const PostAiSchema = z.object({
-  status: z.enum(["ok", "needs_info"]),
-  missing: z.array(z.enum(MISSING_DETAILS)),
+  found: z.object({
+    role: z.string(),
+    pay: z.string(),
+    area: z.string(),
+    mustHave: z.string(),
+  }),
   jobTitle: z.string(),
   post: z.string(),
   mustHaves: z.array(z.string()),
@@ -35,6 +40,7 @@ export const RankAiSchema = z.object({
         z.object({
           mustHave: z.number().int(),
           result: z.enum(VERDICTS),
+          evidence: z.string(), // the applicant's exact words that prove a "met"
         }),
       ),
     }),
@@ -83,6 +89,7 @@ export type CreatePostResponse =
   | ErrorResponse;
 
 // `verdicts` lines up with the job's must-haves list, one entry each.
+// `evidence` lines up too: the applicant's own words behind each ✓ ("" otherwise).
 // `strengths` are up to 2 extra plus points, used to break ties.
 export type CheckedApplicant = {
   id: string;
@@ -90,6 +97,7 @@ export type CheckedApplicant = {
   enoughInfo: boolean;
   strengths: string[];
   verdicts: Verdict[];
+  evidence: string[];
 };
 
 export type SamplesResponse = { status: "ok"; text: string } | ErrorResponse;

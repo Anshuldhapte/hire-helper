@@ -104,8 +104,14 @@ export default function Home() {
       return;
     }
 
+    // A new description replaces the old job straight away, so an old post or ranking can
+    // never be used with the new job, even if this request fails. The typed text stays.
     setCreating(true);
     setPostMessage(null);
+    setJob(null);
+    setResult(null);
+    setRankMessage(null);
+    setCopyState("idle");
     const data = await postJson<CreatePostResponse>(
       "/api/create-post",
       { description: text },
@@ -114,16 +120,10 @@ export default function Home() {
     setCreating(false);
 
     if (data.status === "error") {
-      // Keep the old post on screen: the owner can simply try again.
       setPostMessage({ tone: "red", text: data.message });
       return;
     }
-    // A new description replaces the old job, so the old ranking no longer applies.
-    setResult(null);
-    setRankMessage(null);
-    setCopyState("idle");
     if (data.status === "needs_info") {
-      setJob(null);
       setPostMessage({
         tone: "yellow",
         text:
@@ -332,6 +332,9 @@ export default function Home() {
                         {VERDICT_MARK[v.result].icon}
                       </span>{" "}
                       {v.mustHave}
+                      {v.evidence && (
+                        <span className="text-zinc-500"> — “{v.evidence}”</span>
+                      )}
                     </li>
                   ))}
                 </ul>

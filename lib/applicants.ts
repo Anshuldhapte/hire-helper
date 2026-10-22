@@ -118,7 +118,7 @@ export type RankedCard = {
   name: string;
   score: number;
   reason: string;
-  verdicts: { mustHave: string; result: Verdict }[];
+  verdicts: { mustHave: string; result: Verdict; evidence: string }[];
   text: string;
   phone: string | null;
   whatsapp: string | null;
@@ -166,6 +166,7 @@ export function buildRanking(
       verdicts: mustHaves.map((mustHave, i) => ({
         mustHave,
         result: result.verdicts[i],
+        evidence: result.evidence[i] ?? "",
       })),
       text: applicant.text,
       phone: applicant.phone,

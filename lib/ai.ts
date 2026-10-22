@@ -2,9 +2,44 @@ import { ApiError, GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import type { ErrorResponse } from "./schemas";
 
-// Free-plan speed jumps around (2s one minute, 20s the next), so every question goes to
-// both models at once and the first good answer wins. Each model has its own free quota.
-const MODELS = ["gemini-3.5-flash", "gemini-flash-lite-latest"];
+// On the free plan each model has its own daily quota, and speed jumps around (2s one
+// minute, 20s the next). So each question goes to the 2 best models that are working
+// right now, and the first good answer wins. Listed in order of preference. Use real model
+// names, not "-latest" aliases: an alias shares its quota with the model it points to.
+const MODELS = [
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.8-flash",
+];
+const MODELS_PER_QUESTION = 2;
+
+// Models to skip for now: out of daily quota (until it resets) or overloaded (1 minute).
+const restingUntil = new Map<string, number>();
+
+function rest(model: string, err: unknown, cancelledByUs: boolean) {
+  if (cancelledByUs) return; // another model answered first; this one is fine
+  if (!(err instanceof ApiError)) {
+    restingUntil.set(model, Date.now() + 60_000); // too slow: hit our time limit
+    return;
+  }
+  if (err.status === 429) {
+    const seconds = Number(err.message.match(/"retryDelay":"(\d+)s"/)?.[1] ?? 3600);
+    restingUntil.set(model, Date.now() + seconds * 1000);
+  } else if (err.status >= 500) {
+    restingUntil.set(model, Date.now() + 60_000);
+  }
+}
+
+function pickModels() {
+  const now = Date.now();
+  const ready = MODELS.filter((m) => (restingUntil.get(m) ?? 0) <= now);
+  // If every model is resting, try the ones that will be back soonest.
+  const pool = ready.length > 0 ? ready : [...MODELS].sort(
+    (a, b) => (restingUntil.get(a) ?? 0) - (restingUntil.get(b) ?? 0),
+  );
+  return pool.slice(0, MODELS_PER_QUESTION);
+}
 
 class MissingKeyError extends Error {}
 
@@ -28,19 +63,24 @@ export async function askForJson<T extends z.ZodType>(options: {
   const stopOthers = new AbortController();
 
   const ask = async (model: string): Promise<z.infer<T>> => {
-    const response = await new GoogleGenAI({ apiKey }).models.generateContent({
-      model,
-      contents: options.prompt,
-      config: {
-        systemInstruction: options.system,
-        responseMimeType: "application/json",
-        responseJsonSchema: jsonSchema,
-        // Short thinking keeps answers fast; these are simple checks.
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        abortSignal: stopOthers.signal,
-        httpOptions: { timeout: options.timeoutMs },
-      },
-    });
+    const response = await new GoogleGenAI({ apiKey }).models
+      .generateContent({
+        model,
+        contents: options.prompt,
+        config: {
+          systemInstruction: options.system,
+          responseMimeType: "application/json",
+          responseJsonSchema: jsonSchema,
+          // Short thinking keeps answers fast; these are simple checks.
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          abortSignal: stopOthers.signal,
+          httpOptions: { timeout: options.timeoutMs },
+        },
+      })
+      .catch((err) => {
+        rest(model, err, stopOthers.signal.aborted);
+        throw err;
+      });
     let data: unknown;
     try {
       data = JSON.parse(response.text ?? "");
@@ -54,7 +94,7 @@ export async function askForJson<T extends z.ZodType>(options: {
   };
 
   try {
-    return await Promise.any(MODELS.map(ask));
+    return await Promise.any(pickModels().map(ask));
   } catch (err) {
     // Every model failed: report the first one's error, which explains the most.
     const first = err instanceof AggregateError ? err.errors[0] : err;
