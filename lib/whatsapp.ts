@@ -7,6 +7,17 @@ export function interviewMessage(name: string, roleTitle: string, interviewTime:
   return `${greeting} Thank you for applying for the ${roleTitle} job. Can you come for a short interview ${when}? Please reply YES to confirm.`;
 }
 
+// For someone from the Kaam Pakka worker list: they didn't apply, so say why we're writing.
+export function matchInviteMessage(
+  name: string,
+  job: { roleTitle: string; area: string; pay: string },
+  interviewTime: string,
+) {
+  const greeting = name ? `Namaste ${name}!` : "Namaste!";
+  const when = interviewTime.trim() || "tomorrow";
+  return `${greeting} A shop in ${job.area} has a ${job.roleTitle} job (${job.pay}) that matches your Kaam Pakka profile. Can you come for a short interview ${when}? Please reply YES to confirm. You never pay any fee.`;
+}
+
 export function checkInMessage(name: string) {
   const greeting = name ? `Namaste ${name}` : "Namaste";
   return `${greeting}, how is your first week going? Reply 1 = all good, 2 = some problems, 3 = thinking of leaving.`;

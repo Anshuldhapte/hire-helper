@@ -5,7 +5,9 @@ import { PreviewAiSchema, PreviewRequestSchema, type PreviewResponse } from "@/l
 const SYSTEM = `You write short job previews for young people in villages and small towns of Maharashtra, who are more comfortable in Marathi or Hindi than English. Given a job, write one preview in Marathi and one in Hindi (Devanagari), each under 80 words, in simple everyday spoken words, not formal ones.
 
 Each preview must say: the pay, the working hours or shift, the daily work, where they will stay (from the accommodation details), how to apply (reply on WhatsApp with name and phone number), and that there is no fee to apply or join.
-Write the pay amount with digits, e.g. "₹12,000" or "12,000 रुपये". Write the area name exactly as given, in English letters, in both previews, e.g. "Kothrud मध्ये काउंटर स्टाफ पाहिजे" (not "कोथरूड"), so the candidate can find it on a map. Both rules are checked; a preview without them is thrown away.`;
+Write the pay amount with digits, e.g. "₹12,000" or "12,000 रुपये". Write the area name exactly as given, in English letters, in both previews, e.g. "Kothrud मध्ये काउंटर स्टाफ पाहिजे" (not "कोथरूड"), so the candidate can find it on a map. Both rules are checked; a preview without them is thrown away.
+
+Also translate each screening question into simple spoken Marathi (questionsMarathi) and Hindi (questionsHindi), one for one, in the same order, keeping it a short yes/no question. Keep numbers, place names and brand names as given.`;
 
 const MISMATCH = "Preview didn't match the job. Please try again.";
 
@@ -22,6 +24,8 @@ export async function POST(request: Request) {
     `Accommodation: ${job.accommodation || "not given"}`,
     "Must-haves:",
     ...job.mustHaves.map((m) => `- ${m}`),
+    "Screening questions:",
+    ...job.questions.map((q, i) => `${i + 1}. ${q}`),
   ].join("\n");
 
   // Code check: each preview must contain the real pay amount and area name.
@@ -39,12 +43,18 @@ export async function POST(request: Request) {
       timeoutMs: 15_000,
       check: (a) => {
         if (!matches(a.marathi) || !matches(a.hindi)) throw new BadAiAnswerError("preview doesn't match the job");
+        // One translation per question, none blank, or the lists wouldn't line up.
+        const n = job.questions.length;
+        for (const list of [a.questionsMarathi, a.questionsHindi])
+          if (list.length !== n || list.some((q) => !q.trim())) throw new BadAiAnswerError("questions not translated one for one");
       },
     });
     return Response.json({
       status: "ok",
       marathi: fixLineBreaks(out.marathi).trim(),
       hindi: fixLineBreaks(out.hindi).trim(),
+      questionsMarathi: out.questionsMarathi.map((q) => q.trim()),
+      questionsHindi: out.questionsHindi.map((q) => q.trim()),
     } satisfies PreviewResponse);
   } catch (err) {
     return aiErrorResponse(err, MISMATCH);

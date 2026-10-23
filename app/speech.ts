@@ -25,6 +25,13 @@ export const useVoices = () => useSyncExternalStore(subscribeVoices, () => voice
 export const findVoice = (voices: SpeechSynthesisVoice[], lang: string) =>
   voices.find((v) => v.lang.toLowerCase().startsWith(lang)) ?? null;
 
+// The best voice for a page language. Marathi falls back to a Hindi voice (same script,
+// close enough to follow) because many phones have Hindi but not Marathi.
+export function voiceFor(voices: SpeechSynthesisVoice[], lang: "mr" | "hi" | "en") {
+  if (lang === "en") return voices.find((v) => v.lang === "en-IN") ?? findVoice(voices, "en");
+  return findVoice(voices, lang) ?? (lang === "mr" ? findVoice(voices, "hi") : null);
+}
+
 export function speak(text: string, voice: SpeechSynthesisVoice) {
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.voice = voice;

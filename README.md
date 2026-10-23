@@ -114,6 +114,17 @@ So the app makes clear, fee-free posts, checks each applicant against the must-h
 
 **Known limits:** the free Gemini plan allows about 15 requests a minute per model; the AI can be cautious and mark a real skill as ?, which the owner can judge from the proof and original reply; and the joining/moving question names Pune.
 
+## Two sides, two pages
+
+The start page (`/`) asks one question: **I want to hire** or **I want work**.
+
+- **`/work`: for job seekers** (often from villages), in मराठी, हिंदी or English, mostly taps. Six short steps: about you (name, WhatsApp number, where you live, Pune or willing to move, where you'll stay, languages) → work you want → what you can do (Yes / No / Learning for 12 skills such as cash & UPI, stock register, lifting, bike & licence, Google Maps, cooking, cleaning) → past jobs (role, where, how long, why you left) → when you can work (shifts, days, start date, expected pay) → check and agree (consent to share with matching shops).
+- **`/hire`: for shop owners.** Describe the job in one line → job card → **Kaam Pakka automatically finds the best 3 workers** from its worker list and shows each with ✓/✗/? and proof → one tap sends a WhatsApp interview invite for **tomorrow at 11 am** (the time is editable; the owner presses Send). Replies the owner got on WhatsApp can still be pasted and ranked in a folded section.
+
+**Where worker data lives today:** `lib/workers.ts` holds 24 sample workers (names and numbers are made up). People who fill `/work` are saved **on that phone only** (browser storage) and are included in matches on the same phone. There's no server database yet; adding one later (e.g. Supabase or Neon) only replaces where the list is read from and saved to: the profile format and matching stay the same.
+
+**How matching works:** plain code first picks the 12 workers whose wanted roles fit the job (people who can't come to Pune go last), turns each profile into plain sentences ("Can handle cash and UPI payments." / "Cannot ride a two-wheeler…"), and runs the same ranking as pasted replies: proof-checked ✓/✗/?, fairness rules, score and top 3.
+
 ## How to run it locally
 
 1. Install [Node.js](https://nodejs.org) (LTS) and [git](https://git-scm.com).
@@ -136,7 +147,9 @@ So the app makes clear, fee-free posts, checks each applicant against the must-h
 
 ## Project layout
 
-- `app/page.tsx`: the one screen · `app/ui.tsx`: logo, step bar, cards · `app/speech.ts`: Listen and mic
+- `app/page.tsx`: start page (hire or find work) · `app/hire/page.tsx`: employer page · `app/work/page.tsx`: job seeker questionnaire
+- `lib/workers.ts`: worker profile format, questionnaire options, 24 sample workers, candidate picking · `app/workerStore.ts`: workers saved on this phone
+- `app/ui.tsx`: logo, step bar, cards · `app/speech.ts`: Listen and mic
 - `app/api/create-post`, `rank`, `samples`, `preview`: the four AI routes
 - `lib/ai.ts`: Gemini calls, `MODELS`, time limits, error messages
 - `lib/schemas.ts`: zod schemas and types · `lib/quote.ts`: the proof check

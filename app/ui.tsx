@@ -28,10 +28,10 @@ export function Logo() {
 const STEPS = ["Describe", "Add replies", "Top 3"];
 
 // The 1-2-3 progress bar under the header. `current` is 1–3.
-export function Stepper({ current }: { current: number }) {
+export function Stepper({ current, labels = STEPS }: { current: number; labels?: string[] }) {
   return (
     <ol className="mt-5 grid grid-cols-3 gap-2" aria-label="Progress">
-      {STEPS.map((label, i) => {
+      {labels.map((label, i) => {
         const step = i + 1;
         const done = step < current;
         const active = step === current;
@@ -56,9 +56,10 @@ export function Stepper({ current }: { current: number }) {
   );
 }
 
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function Card({ children, className = "", id }: { children: ReactNode; className?: string; id?: string }) {
   return (
     <section
+      id={id}
       className={`rise-in rounded-3xl bg-white p-5 shadow-[0_8px_30px_rgba(20,43,110,0.08)] ring-1 ring-brand-100 ${className}`}
     >
       {children}

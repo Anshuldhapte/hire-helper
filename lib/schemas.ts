@@ -62,7 +62,12 @@ export const RankAiSchema = z.object({
 export const SamplesAiSchema = z.object({ replies: z.array(z.string()) });
 
 // ---- AI call 4: Marathi and Hindi job preview ----
-export const PreviewAiSchema = z.object({ marathi: z.string(), hindi: z.string() });
+export const PreviewAiSchema = z.object({
+  marathi: z.string(),
+  hindi: z.string(),
+  questionsMarathi: z.array(z.string()), // the screening questions, same order
+  questionsHindi: z.array(z.string()),
+});
 
 // ---- What the page sends to the routes ----
 const MustHaveIn = z.object({ id: z.string().min(1).max(20), label: z.string().trim().min(1).max(200) });
@@ -88,6 +93,7 @@ export const PreviewRequestSchema = z.object({
   ...JobFacts,
   openings: z.number().int().min(1).max(20),
   accommodation: z.string().max(100),
+  questions: z.array(z.string().trim().min(1).max(300)).max(6),
 });
 
 // ---- What the routes send back ----
@@ -128,4 +134,6 @@ export type CheckedApplicant = {
 
 export type RankResponse = { status: "ok"; results: CheckedApplicant[] } | ErrorResponse;
 export type SamplesResponse = { status: "ok"; text: string } | ErrorResponse;
-export type PreviewResponse = { status: "ok"; marathi: string; hindi: string } | ErrorResponse;
+export type PreviewResponse =
+  | { status: "ok"; marathi: string; hindi: string; questionsMarathi: string[]; questionsHindi: string[] }
+  | ErrorResponse;
